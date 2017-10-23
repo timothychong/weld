@@ -19,6 +19,7 @@ pub const SIR_OPT_KEY: &'static str = "weld.optimization.sirOptimization";
 pub const LLVM_OPTIMIZATION_LEVEL_KEY: &'static str = "weld.llvm.optimization.level";
 pub const DUMP_CODE_KEY: &'static str = "weld.compile.dumpCode";
 pub const DUMP_CODE_DIR_KEY: &'static str = "weld.compile.dumpCodeDir";
+pub const SDACCEL_KEY: &'static str = "weld.sdaccel";
 
 // Default values of each key
 pub const DEFAULT_MEMORY_LIMIT: i64 = 1000000000;
@@ -28,6 +29,7 @@ pub const DEFAULT_SIR_OPT: bool = true;
 pub const DEFAULT_LLVM_OPTIMIZATION_LEVEL: u32 = 2;
 pub const DEFAULT_DUMP_CODE: bool = false;
 pub const DEFAULT_TRACE_RUN: bool = false;
+pub const DEFAULT_SDACCEL: bool = false;
 
 lazy_static! {
     pub static ref DEFAULT_OPTIMIZATION_PASSES: Vec<Pass> = {
@@ -53,6 +55,7 @@ pub struct ParsedConf {
     pub optimization_passes: Vec<Pass>,
     pub llvm_optimization_level: u32,
     pub dump_code: DumpCodeConf,
+    pub sdaccel: bool
 }
 
 /// Parse a configuration from a WeldConf key-value dictionary.
@@ -97,6 +100,9 @@ pub fn parse(conf: &WeldConf) -> WeldResult<ParsedConf> {
     let value = get_value(conf, TRACE_RUN_KEY);
     let trace_run = value.map(|s| parse_bool_flag(&s, "Invalid flag for trace.run"))
                       .unwrap_or(Ok(DEFAULT_TRACE_RUN))?;
+    let value = get_value(conf, SDACCEL_KEY);
+    let sdaccel = value.map(|s| parse_sdaccel(&s))
+                      .unwrap_or(Ok(DEFAULT_SDACCEL))?;
 
     Ok(ParsedConf {
         memory_limit: memory_limit,
@@ -110,6 +116,7 @@ pub fn parse(conf: &WeldConf) -> WeldResult<ParsedConf> {
             enabled: dump_code_enabled,
             dir: dump_code_dir,
         }
+        sdaccel: sdaccel
     })
 }
 
@@ -176,6 +183,14 @@ fn parse_llvm_optimization_level(s: &str) -> WeldResult<u32> {
     }
 }
 
+// Parse SDAccel output
+fn parse_sdaccel(s: &str) -> WeldResult<bool> {
+    match s.parse::<bool>() {
+        Ok(v) => Ok(v),
+        _ => weld_err!("Invalid SDAccel support:{}", s),
+    }
+}
+
 #[test]
 fn conf_parsing() {
     assert_eq!(parse_threads("1").unwrap(), 1);
@@ -195,4 +210,6 @@ fn conf_parsing() {
     assert_eq!(parse_llvm_optimization_level("0").unwrap(), 0);
     assert_eq!(parse_llvm_optimization_level("2").unwrap(), 2);
     assert!(parse_llvm_optimization_level("5").is_err());
+
+    assert_eq!(parse_sdaccel("true"), true);
 }
