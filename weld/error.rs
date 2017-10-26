@@ -1,6 +1,7 @@
 use std::convert::From;
 use std::error;
 use std::fmt;
+use std;
 
 use easy_ll::LlvmError;
 
@@ -34,6 +35,13 @@ impl From<LlvmError> for WeldError {
     fn from(err: LlvmError) -> WeldError {
         WeldError(err.to_string())
     }
+}
+
+impl std::convert::From<std::io::Error> for WeldError {
+    fn from(err: std::io::Error) -> WeldError {
+        WeldError(err.to_string())
+    }
+
 }
 
 /// Result type returned by Weld.

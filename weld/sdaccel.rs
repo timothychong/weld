@@ -10,6 +10,11 @@ use super::util::SymbolGenerator;
 
 use super::sdaccel_util::*;
 
+//Writing OpenCl output to file
+use std::fs::File;
+use std::io::prelude::*;
+
+
 // Placeholder
 pub struct SDAccelProgram {
     pub sym_gen: SymbolGenerator,
@@ -88,7 +93,12 @@ pub fn ast_to_sdaccel(expr: &TypedExpr) -> WeldResult<String> {
         prog.sym_gen = SymbolGenerator::from_expression(expr);
 
 
-        println!("Input string: {}", prog.gen_input_param_str().unwrap());
+        let input_str = prog.gen_input_param_str().unwrap();
+
+        let with_input = HOST_CODE.replace("$INPUTS", &input_str);
+
+        let mut file = File::create("host.cpp")?;;
+        file.write_all(with_input.as_bytes())?;
 
         Ok(String::from("TRIAL"))
 

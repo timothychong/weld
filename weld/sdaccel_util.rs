@@ -6,6 +6,7 @@ pub const SDACCEL_ARG_SEPARATOR: &'static str = ", ";
 pub const SDACCEL_ARG_POINTER: &'static str = "* ";
 pub const SDACCEL_SIZE_SUFFIX: &'static str = "_size";
 pub const SDACCEL_SIZE_KIND: ScalarKind = ScalarKind::U32;
+pub static HOST_CODE: &'static str = include_str!("resources-sdaccel/host.ll");
 
 pub fn gen_scalar_type_from_kind(scalar_kind: ScalarKind) -> WeldResult<(String)> {
      let output = String::from(match scalar_kind {
