@@ -54,6 +54,8 @@ pub mod conf;
 pub mod util;
 pub mod exprs;
 pub mod expr_hash;
+pub mod sdaccel;
+
 
 pub mod easy_ll;
 
@@ -323,13 +325,24 @@ pub unsafe extern "C" fn weld_module_compile(code: *const c_char,
     }
 
     info!("Started compiling program");
-    let module = llvm::compile_program(&parsed.unwrap(), &conf, &mut stats);
-    info!("Done compiling program");
 
-    if let Err(ref e) = module {
-        err.errno = WeldRuntimeErrno::CompileError;
-        err.message = CString::new(e.description().to_string()).unwrap();
+    if conf.sdaccel {
+        let module = sdaccel::compile_program(
+            &parsed.unwrap(),
+            &conf.optimization_passes);
+
         return std::ptr::null_mut();
+    } else {
+        let module = llvm::compile_program(&parsed.unwrap(), &conf, &mut stats);
+        info!("Done compiling program");
+
+        if let Err(ref e) = module {
+            err.errno = WeldRuntimeErrno::CompileError;
+            err.message = CString::new(e.description().to_string()).unwrap();
+            return std::ptr::null_mut();
+        }
+        info!("Done weld_module_compile");
+        Box::into_raw(Box::new(module.unwrap()))
     }
 
     debug!("\n{}\n", stats.pretty_print());
