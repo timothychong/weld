@@ -1,5 +1,3 @@
-
-
 use super::ast::*;
 use super::error::*;
 use super::passes::*;
@@ -10,8 +8,9 @@ use super::macro_processor;
 use super::program::Program;
 use super::util::SymbolGenerator;
 
-// Placeholder
+use super::sdaccel_util::*;
 
+// Placeholder
 pub struct SDAccelProgram {
     pub sym_gen: SymbolGenerator,
     pub ret_ty: Type,
@@ -32,29 +31,6 @@ impl SDAccelProgram {
     }
 }
 
-pub fn gen_scalar_type_from_kind(scalar_kind: ScalarKind) -> WeldResult<(String)> {
-     let output = String::from(match scalar_kind {
-        ScalarKind::Bool => "bool",
-        ScalarKind::I8 => "signed char",
-        ScalarKind::U8 => "unsigned char",
-        ScalarKind::I32|ScalarKind::I16 => "signed int",
-        ScalarKind::U32|ScalarKind::U16 => "unsigned int",
-        ScalarKind::I64 => "signed long",
-        ScalarKind::U64 => "unsigned long",
-        ScalarKind::F32 => "float",
-        ScalarKind::F64 => "double",
-    });
-     Ok(output)
-}
-
-pub fn gen_scalar_type(ty: &Type) -> WeldResult<String> {
-    match *ty {
-        Type::Scalar(scalar_kind) => gen_scalar_type_from_kind(scalar_kind),
-        _ => weld_err!("Not supported gen_scalar type.")
-    }
-}
-
-
 impl SDAccelProgram {
 
 
@@ -64,20 +40,9 @@ impl SDAccelProgram {
         let mut param_str_vec = Vec::new();
 
         for param in &self.top_params {
-            let mut param_str = String::from("");
-            let x = match param.ty {
-                Type::Scalar(scalar_kind) => gen_scalar_type_from_kind(scalar_kind),
-                Type::Vector(ref boxx) => {
-                    Ok(format!("{} *", gen_scalar_type(boxx).unwrap()))
-                },
-                _ => return weld_err!("Not supported result type.")
-            }.unwrap();
-            param_str.push_str(&x);
-            param_str.push(' ');
-            param_str.push_str(&param.name.name);
-            param_str_vec.push(param_str);
+            param_str_vec.extend_from_slice(&gen_arg(param).unwrap());
         }
-        let final_str = param_str_vec.join(" , ");
+        let final_str = param_str_vec.join(SDACCEL_ARG_SEPARATOR);
         Ok(final_str)
     }
 }

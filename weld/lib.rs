@@ -55,6 +55,7 @@ pub mod util;
 pub mod exprs;
 pub mod expr_hash;
 pub mod sdaccel;
+pub mod sdaccel_util;
 
 
 pub mod easy_ll;
