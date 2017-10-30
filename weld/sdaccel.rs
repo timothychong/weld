@@ -7,6 +7,7 @@ use super::type_inference;
 use super::macro_processor;
 use super::program::Program;
 use super::util::SymbolGenerator;
+use super::code_builder::*;
 
 use super::sdaccel_util::*;
 
@@ -15,13 +16,16 @@ use std::fs::File;
 use std::io::prelude::*;
 
 
+
+
+
 // Placeholder
 pub struct SDAccelProgram {
     pub sym_gen: SymbolGenerator,
     pub ret_ty: Type,
     pub top_params: Vec<TypedParameter>,
-
-    // Input params
+    init: CodeBuilder,
+    dealloc: CodeBuilder,
 }
 
 impl SDAccelProgram {
@@ -30,9 +34,21 @@ impl SDAccelProgram {
             ret_ty: ret_ty.clone(),
             top_params: top_params.clone(),
             sym_gen: SymbolGenerator::new(),
+            init: CodeBuilder::new(),
+            dealloc: CodeBuilder::new(),
         };
         /// add main
         prog
+    }
+
+    pub fn new_cl_int(&mut self) -> cl_int {
+        let mut cl = cl_int {
+            sdaccel: SDAccelType {
+                sym: self.sym_gen.new_symbol(SDACCEL_CL_INT_SYM_KEY),
+            },
+            type_name: String::from("cl_int"),
+        };
+        cl
     }
 }
 
@@ -50,6 +66,24 @@ impl SDAccelProgram {
         let final_str = param_str_vec.join(SDACCEL_ARG_SEPARATOR);
         Ok(final_str)
     }
+
+    pub fn allocate_buffer(&mut self) -> WeldResult<()> {
+        for param in &self.top_params.clone() {
+            match param.ty {
+                Type::Vector(ref boxx) =>  {
+                    self.init.add_line(gen_line_size_in_byte(&param).unwrap());
+                    let mut cl = self.new_cl_int();
+                    self.init.add_line(cl.gen_declare().unwrap());
+                    self.init.add_line(gen_line_buffer_mem(&param, &mut cl).unwrap());
+                }
+                _ => {}
+            }
+
+        }
+        Ok(())
+    }
+
+
 }
 
 pub fn apply_opt_passes(expr: &mut TypedExpr, opt_passes: &Vec<Pass>) -> WeldResult<()> {
@@ -92,13 +126,19 @@ pub fn ast_to_sdaccel(expr: &TypedExpr) -> WeldResult<String> {
         let mut prog = SDAccelProgram::new(&expr.ty, params);
         prog.sym_gen = SymbolGenerator::from_expression(expr);
 
-
         let input_str = prog.gen_input_param_str().unwrap();
 
         let with_input = HOST_CODE.replace("$INPUTS", &input_str);
 
-        let mut file = File::create("host.cpp")?;;
-        file.write_all(with_input.as_bytes())?;
+        prog.allocate_buffer();
+
+        let mut final_host = CodeBuilder::new();
+        final_host.add(with_input);
+        final_host.add_code(&prog.init);
+
+        let mut file = File::create("host.cpp")?;
+        println!("{}", final_host.result());
+        file.write_all(final_host.result().as_bytes())?;
 
         Ok(String::from("TRIAL"))
 

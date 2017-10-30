@@ -32,6 +32,3 @@ int routine($INPUTS) {
 
     xcl_world world = xcl_world_single();
 
-    cl_mem during_allocation = clCreateBuffer(world.context, CL_MEM_COPY_HOST_PTR, size_in_bytes,
-                     host_memory.data(), &err);
-}
