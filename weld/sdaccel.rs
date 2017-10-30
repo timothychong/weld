@@ -24,7 +24,7 @@ pub struct SDAccelProgram {
     pub sym_gen: SymbolGenerator,
     pub ret_ty: Type,
     pub top_params: Vec<TypedParameter>,
-    init: CodeBuilder,
+    main: CodeBuilder,
     dealloc: CodeBuilder,
 }
 
@@ -34,7 +34,7 @@ impl SDAccelProgram {
             ret_ty: ret_ty.clone(),
             top_params: top_params.clone(),
             sym_gen: SymbolGenerator::new(),
-            init: CodeBuilder::new(),
+            main: CodeBuilder::new(),
             dealloc: CodeBuilder::new(),
         };
         /// add main
@@ -71,10 +71,10 @@ impl SDAccelProgram {
         for param in &self.top_params.clone() {
             match param.ty {
                 Type::Vector(ref boxx) =>  {
-                    self.init.add_line(gen_line_size_in_byte(&param).unwrap());
+                    self.main.add_line(gen_line_size_in_byte(&param));
                     let mut cl = self.new_cl_int();
-                    self.init.add_line(cl.gen_declare().unwrap());
-                    self.init.add_line(gen_line_buffer_mem(&param, &mut cl).unwrap());
+                    self.main.add_line(cl.gen_declare());
+                    self.main.add_line(gen_line_buffer_mem(&param, &mut cl));
                 }
                 _ => {}
             }
@@ -82,6 +82,10 @@ impl SDAccelProgram {
         }
         Ok(())
     }
+
+    //pub fn get_kernel(&mut self) -> WeldResult<()> {
+
+    //}
 
 
 }
@@ -131,10 +135,11 @@ pub fn ast_to_sdaccel(expr: &TypedExpr) -> WeldResult<String> {
         let with_input = HOST_CODE.replace("$INPUTS", &input_str);
 
         prog.allocate_buffer();
+        //prog.get_kernel();
 
         let mut final_host = CodeBuilder::new();
         final_host.add(with_input);
-        final_host.add_code(&prog.init);
+        final_host.add_code(&prog.main);
 
         let mut file = File::create("host.cpp")?;
         println!("{}", final_host.result());
