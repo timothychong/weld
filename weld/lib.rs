@@ -56,6 +56,7 @@ pub mod exprs;
 pub mod expr_hash;
 pub mod sdaccel;
 pub mod sdaccel_util;
+pub mod sdaccel_type;
 
 
 pub mod easy_ll;
@@ -328,7 +329,7 @@ pub unsafe extern "C" fn weld_module_compile(code: *const c_char,
     info!("Started compiling program");
 
     if conf.sdaccel {
-        let module = sdaccel::compile_program(
+        let _module = sdaccel::compile_program(
             &parsed.unwrap(),
             &conf.optimization_passes);
 

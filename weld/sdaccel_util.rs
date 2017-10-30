@@ -1,7 +1,8 @@
 use super::ast::*;
 use super::error::*;
+use super::sdaccel_type::*;
 
-
+// Name generation
 pub const SDACCEL_ARG_SEPARATOR: &'static str = ", ";
 pub const SDACCEL_ARG_POINTER: &'static str = "* ";
 pub const SDACCEL_SIZE_SUFFIX: &'static str = "_size";
@@ -10,39 +11,10 @@ pub const SDACCEL_SIZE_KIND: ScalarKind = ScalarKind::U32;
 pub const SDACCEL_BUFFER_MEM_SUFFIX: &'static str = "_mbuf";
 
 
-pub const SDACCEL_CL_INT_SYM_KEY: &'static str = "CL_INT_KEY";
+pub const SDACCEL_MAIN_PROGRAM: &'static str = "main_program";
+pub const SDACCEL_MAIN_KERNEL: &'static str = "main_kernel";
 
 pub static HOST_CODE: &'static str = include_str!("resources-sdaccel/host.ll");
-
-pub struct SDAccelType {
-    pub sym: Symbol,
-}
-impl SDAccelType{
-    pub fn gen_name(&mut self) -> String {
-        format!("{}{}", &self.sym.name, &self.sym.id)
-    }
-    pub fn gen_var(&mut self, type_name: String) -> String {
-        format!("{} {}", type_name, self.gen_name())
-    }
-    pub fn gen_declare(&mut self, type_name: String) -> String {
-        format!("{};", self.gen_var(type_name))
-    }
-}
-
-pub struct cl_int {
-    pub sdaccel: SDAccelType,
-    pub type_name: String,
-}
-
-impl cl_int {
-    pub fn gen_declare(&mut self) -> String {
-        self.sdaccel.gen_declare(self.type_name.clone())
-    }
-    pub fn gen_name(&mut self) -> String {
-        self.sdaccel.gen_name()
-    }
-}
-
 
 
 pub fn gen_scalar_type_from_kind(scalar_kind: ScalarKind) -> String {
@@ -81,15 +53,20 @@ pub fn gen_name_buffer_mem(param: &TypedParameter) -> String {
     let name = &param.name.name;
     format!("{}{}", name, SDACCEL_BUFFER_MEM_SUFFIX)
 }
-pub fn gen_line_buffer_mem(param: &TypedParameter, cl: &mut cl_int) -> String {
-    format!("cl_mem {} = clCreateBuffer(world.context, \
-    CL_MEM_COPY_HOST_PTR, {}, \
-    {}, &{});",
-    gen_name_buffer_mem(param),
-    gen_name_size_in_byte(param),
-    gen_name(param),
-    cl.gen_name())
+pub fn gen_line_buffer_mem(param: &TypedParameter, cl: &mut SDAccelVar,
+                           mem_var: &mut SDAccelVar) -> String {
 
+    let mut func = SDAccelFuncBuilder {
+        ty: SDAccelFuncType::CLCreateBuffer,
+        args: vec![
+        "world.context".to_string(),
+        "CL_MEM_COPY_HOST_PTR".to_string(),
+        gen_name_size_in_byte(param),
+        gen_name(param),
+        format!("&{}",cl.gen_name())
+        ]
+    };
+    assign(mem_var.gen_var(), func.emit())
 }
 
 pub fn gen_name_size_in_byte(param: &TypedParameter) -> String {
@@ -101,7 +78,6 @@ pub fn assign(lhs: String, rhs: String) -> String {
 }
 
 pub fn gen_size_in_byte(param: &TypedParameter) -> WeldResult<String> {
-    let name = &param.name.name;
     match param.ty {
         Type::Vector(ref boxx) => {
             let size_name = gen_name_size(param);
@@ -143,13 +119,12 @@ pub fn gen_name_size(param: &TypedParameter) -> String {
 
 pub fn gen_arg(param: &TypedParameter) -> WeldResult<Vec<String>>{
     let mut result = Vec::new();
-    let name = &param.name.name;
 
     match param.ty {
-        Type::Scalar(scalar_kind) => {
+        Type::Scalar(_) => {
             result.push(gen_var(param).unwrap());
         },
-        Type::Vector(ref boxx) => {
+        Type::Vector(_) => {
             let size = TypedParameter {
                 name : Symbol {
                     name : gen_name_size(param),
@@ -159,7 +134,6 @@ pub fn gen_arg(param: &TypedParameter) -> WeldResult<Vec<String>>{
             };
             //// Actual vector
 
-            let vec_arg = gen_var(param).unwrap();
             result.push(gen_var(param).unwrap());
             result.push(gen_var(&size).unwrap());
         },
