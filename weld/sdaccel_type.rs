@@ -34,7 +34,7 @@ pub enum SDAccelFuncType {
     CLCreateBuffer,
     XCLImportBinary,
     XCLGetKernel,
-
+    XCLSetKernelArg,
 }
 
 impl fmt::Display for SDAccelFuncType{
@@ -43,8 +43,8 @@ impl fmt::Display for SDAccelFuncType{
             SDAccelFuncType::CLCreateBuffer => write!(f, "clCreateBuffer"),
             SDAccelFuncType::XCLImportBinary => write!(f, "xcl_import_binary"),
             SDAccelFuncType::XCLGetKernel => write!(f, "xcl_get_kernel"),
+            SDAccelFuncType::XCLSetKernelArg => write!(f, "xcl_set_kernel_arg"),
         }
-
     }
 }
 
@@ -71,6 +71,10 @@ impl SDAccelFuncBuilder {
         let params_str = self.args.join(SDACCEL_ARG_SEPARATOR);
         format!("{}({})", funcname, params_str)
     }
+    pub fn emit_line (&mut self)-> String{
+        format!("{};", self.emit())
+    }
+
 }
 
 pub fn sym_key_from_sdacceltype(ty: SDAccelType) -> String {
@@ -83,6 +87,7 @@ pub fn sym_key_from_sdacceltype(ty: SDAccelType) -> String {
     }
 }
 
+#[derive(Clone)]
 pub struct SDAccelVar{
     pub sym: Symbol,
     pub ty: SDAccelType,
@@ -96,9 +101,16 @@ impl SDAccelVar{
     pub fn gen_name(&mut self) -> String {
         format!("{}{}", &self.sym.name, &self.sym.id)
     }
+
+    pub fn gen_ref(&mut self) -> String {
+        format!("&{}", self.gen_name())
+    }
+
     pub fn gen_var(&mut self) -> String {
         format!("{} {}", self.gen_typename(), self.gen_name())
     }
+
+
     pub fn gen_declare(&mut self) -> String {
         format!("{};", self.gen_var())
     }

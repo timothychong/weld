@@ -63,7 +63,7 @@ pub fn gen_line_buffer_mem(param: &TypedParameter, cl: &mut SDAccelVar,
         "CL_MEM_COPY_HOST_PTR".to_string(),
         gen_name_size_in_byte(param),
         gen_name(param),
-        format!("&{}",cl.gen_name())
+        cl.gen_ref()
         ]
     };
     assign(mem_var.gen_var(), func.emit())
@@ -77,12 +77,16 @@ pub fn assign(lhs: String, rhs: String) -> String {
     format!("{} = {};", lhs, rhs)
 }
 
+pub fn gen_sizeof(x:String) -> String {
+    format!("sizeof( {} )", x)
+}
+
 pub fn gen_size_in_byte(param: &TypedParameter) -> WeldResult<String> {
     match param.ty {
         Type::Vector(ref boxx) => {
             let size_name = gen_name_size(param);
             let kind_name = gen_scalar_type(boxx).unwrap();
-            Ok(format!("{} * sizeof( {} )", size_name, kind_name))
+            Ok(format!("{} * {}", size_name, gen_sizeof(kind_name)))
         }
         _ => weld_err!("Not supported result type for gen_size_in_type.")
     }
@@ -133,7 +137,6 @@ pub fn gen_arg(param: &TypedParameter) -> WeldResult<Vec<String>>{
                 ty : Type::Scalar(SDACCEL_SIZE_KIND)
             };
             //// Actual vector
-
             result.push(gen_var(param).unwrap());
             result.push(gen_var(&size).unwrap());
         },
@@ -141,3 +144,70 @@ pub fn gen_arg(param: &TypedParameter) -> WeldResult<Vec<String>>{
     }
     Ok(result)
 }
+
+pub fn get_sdaccel_type_from_kind(scalar_kind: ScalarKind) -> SDAccelType {
+    match scalar_kind {
+         // Just use cl_int for everything for now
+         // TODO
+         _ => SDAccelType::CLInt
+    }
+}
+
+pub fn gen_set_arg(param: &TypedParameter, index: &mut i32, mut kernel: SDAccelVar)
+    -> WeldResult<Vec<String>>{
+    let mut vars = Vec::new();
+    let mut result = Vec::new();
+    let name = &param.name.name;
+
+    match param.ty {
+        Type::Scalar(scalar_kind) => {
+            vars.push(
+                SDAccelVar {
+                    sym: Symbol {
+                        name: name.clone(),
+                        id: 0
+                    },
+                    ty:get_sdaccel_type_from_kind(scalar_kind)
+                }
+           );
+        },
+        Type::Vector(_) => {
+            let size = SDAccelVar {
+                sym : Symbol {
+                    name : gen_name_size(param),
+                    id : 0
+                },
+                ty : SDAccelType::CLInt
+            };
+            let mem = SDAccelVar {
+                sym : Symbol {
+                    name : name.clone(),
+                    id : 0
+                },
+                ty : SDAccelType::CLMem
+            };
+            //// Actual vector
+            vars.push(size);
+            vars.push(mem);
+        },
+        _ => return weld_err!("Not supported vars type.")
+    }
+
+    for mut var in vars {
+        result.push(SDAccelFuncBuilder {
+            ty: SDAccelFuncType::XCLSetKernelArg,
+            args: vec![
+            kernel.gen_name(),
+            index.to_string(),
+            gen_sizeof(var.gen_typename()),
+            var.gen_name(),
+            ]
+        }.emit());
+        *index = *index + 1;
+
+    }
+
+    Ok(result)
+
+}
+

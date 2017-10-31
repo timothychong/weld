@@ -30,5 +30,3 @@ void check(cl_int err) {
 
 int routine($INPUTS) {
 
-    xcl_world world = xcl_world_single();
-

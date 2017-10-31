@@ -22,8 +22,10 @@ pub struct SDAccelProgram {
     pub sym_gen: SymbolGenerator,
     pub ret_ty: Type,
     pub top_params: Vec<TypedParameter>,
+    pub top_params_cl: Vec<SDAccelVar>,
     main: CodeBuilder,
     world: SDAccelVar,
+    kernel: SDAccelVar,
     dealloc: CodeBuilder,
 }
 
@@ -32,16 +34,23 @@ impl SDAccelProgram {
         let mut generator = SymbolGenerator::new();
         let world_sym = generator.new_symbol(
             &sym_key_from_sdacceltype(SDAccelType::XCLWorld));
+        let mut kernel =  generator.new_symbol(
+            &sym_key_from_sdacceltype(SDAccelType::CLKernel));
         let mut prog = SDAccelProgram {
             ret_ty: ret_ty.clone(),
             top_params: top_params.clone(),
+            top_params_cl: Vec::new(),
             sym_gen: generator,
             main: CodeBuilder::new(),
             dealloc: CodeBuilder::new(),
             world: SDAccelVar{
                 sym: world_sym,
                 ty: SDAccelType::XCLWorld,
-            }
+            },
+            kernel: SDAccelVar{
+                sym: kernel,
+                ty: SDAccelType::CLKernel,
+            },
         };
         /// add main
         prog
@@ -90,8 +99,8 @@ impl SDAccelProgram {
 
     pub fn get_kernel(&mut self) -> WeldResult<()> {
         let mut program = self.new_cl_var(SDAccelType::CLProgram);
-        let mut kernel = self.new_cl_var(SDAccelType::CLKernel);
 
+        self.main.add_line(self.world.gen_declare_assign_str("xcl_world_single()"));
         self.main.add_line(
             assign(
                 program.gen_var(),
@@ -105,15 +114,15 @@ impl SDAccelProgram {
             )
         );
 
-        self.main.add_line(kernel.gen_declare_assign_str("0"));
+        self.main.add_line(self.kernel.gen_declare_assign_str("0"));
 
         self.main.add_line(
             assign(
-                kernel.gen_name(),
+                self.kernel.gen_name(),
                 SDAccelFuncBuilder {
                     ty: SDAccelFuncType::XCLGetKernel,
                     args: vec![
-                        program.gen_var(),
+                        program.gen_name(),
                         SDACCEL_MAIN_KERNEL.to_string(),
                     ]
                 }.emit()
@@ -122,7 +131,14 @@ impl SDAccelProgram {
         Ok(())
     }
 
-
+    pub fn set_args(&mut self) {
+        let mut index:i32 = 0;
+        for param in &self.top_params {
+            for  line in gen_set_arg(param, &mut index, self.kernel.clone()).unwrap() {
+                self.main.add_line(line);
+            }
+        }
+    }
 }
 
 pub fn apply_opt_passes(expr: &mut TypedExpr, opt_passes: &Vec<Pass>) -> WeldResult<()> {
@@ -168,6 +184,7 @@ pub fn ast_to_sdaccel(expr: &TypedExpr) -> WeldResult<String> {
 
         let _buffer_res = prog.allocate_buffer();
         let _kernel_res = prog.get_kernel();
+        let _args_res = prog.set_args();
 
         let mut final_host = CodeBuilder::new();
         final_host.add(with_input);
