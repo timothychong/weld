@@ -10,6 +10,8 @@ pub const SDACCEL_SIZE_IN_BYTES_SUFFIX: &'static str = "_size_in_byte";
 pub const SDACCEL_SIZE_KIND: ScalarKind = ScalarKind::U32;
 pub const SDACCEL_BUFFER_MEM_SUFFIX: &'static str = "_mbuf";
 
+pub const SDACCEL_RESULT_NAME: &'static str = "result";
+
 
 pub const SDACCEL_MAIN_PROGRAM: &'static str = "main_program";
 pub const SDACCEL_MAIN_KERNEL: &'static str = "main_kernel";
@@ -38,15 +40,24 @@ pub fn gen_scalar_type(ty: &Type) -> WeldResult<String> {
     }
 }
 
-pub fn gen_var_size_in_byte(param: &TypedParameter) -> String {
-    let mut myparam = param.clone();
-    myparam.name.name = gen_name_size_in_byte(param);
-    myparam.ty = Type::Scalar(SDACCEL_SIZE_KIND);
-    gen_var(&myparam).unwrap()
+pub fn gen_var_size_in_byte(name: &String) -> String {
+    let ty = Type::Scalar(SDACCEL_SIZE_KIND);
+    gen_var(ty, &gen_name_size_in_byte(name)).unwrap()
 }
 
-pub fn gen_line_size_in_byte(param: &TypedParameter) -> String {
-    assign( gen_var_size_in_byte(param), gen_size_in_byte(param).unwrap())
+pub fn gen_var_size_in_byte_typed(param: &TypedParameter) -> String {
+    let mut myparam = param.clone();
+    myparam.name.name = gen_name_size_in_byte_typed(param);
+    myparam.ty = Type::Scalar(SDACCEL_SIZE_KIND);
+    gen_var_typed(&myparam).unwrap()
+}
+
+pub fn gen_line_size_in_byte(ty: Type, name: &String) -> String {
+    assign( gen_var_size_in_byte(name), gen_size_in_byte(ty, name).unwrap())
+}
+
+pub fn gen_line_size_in_byte_typed(param: &TypedParameter) -> String {
+    assign( gen_var_size_in_byte_typed(param), gen_size_in_byte_typed(param).unwrap())
 }
 
 pub fn gen_name_buffer_mem(param: &TypedParameter) -> String {
@@ -54,14 +65,15 @@ pub fn gen_name_buffer_mem(param: &TypedParameter) -> String {
     format!("{}{}", name, SDACCEL_BUFFER_MEM_SUFFIX)
 }
 pub fn gen_line_buffer_mem(param: &TypedParameter, cl: &mut SDAccelVar,
-                           mem_var: &mut SDAccelVar) -> String {
+                           mem_var: &mut SDAccelVar,
+                           world: &mut SDAccelVar) -> String {
 
     let mut func = SDAccelFuncBuilder {
         ty: SDAccelFuncType::CLCreateBuffer,
         args: vec![
-        "world.context".to_string(),
+        world.gen_var_attr("context"),
         "CL_MEM_COPY_HOST_PTR".to_string(),
-        gen_name_size_in_byte(param),
+        gen_name_size_in_byte_typed(param),
         gen_name(param),
         cl.gen_ref()
         ]
@@ -69,8 +81,27 @@ pub fn gen_line_buffer_mem(param: &TypedParameter, cl: &mut SDAccelVar,
     assign(mem_var.gen_var(), func.emit())
 }
 
-pub fn gen_name_size_in_byte(param: &TypedParameter) -> String {
-    format!("{}{}", param.name.name, SDACCEL_SIZE_IN_BYTES_SUFFIX)
+pub fn gen_line_alloc_output_buffer_mem(mem_var: &mut SDAccelVar,  index: usize, world: &mut SDAccelVar) -> String {
+
+    let mut func = SDAccelFuncBuilder {
+        ty: SDAccelFuncType::XCLMalloc,
+        args: vec![
+        world.gen_name(),
+        "CL_MEM_WRITE_ONLY".to_string(),
+        gen_name_size_in_byte(&gen_name_result(index)),
+        ]
+    };
+    assign(mem_var.gen_name(), func.emit())
+
+}
+
+
+pub fn gen_name_size_in_byte_typed(param: &TypedParameter) -> String {
+    gen_name_size_in_byte(&param.name.name)
+}
+
+pub fn gen_name_size_in_byte(name: &String) -> String {
+    format!("{}{}", name, SDACCEL_SIZE_IN_BYTES_SUFFIX)
 }
 
 pub fn assign(lhs: String, rhs: String) -> String {
@@ -81,10 +112,15 @@ pub fn gen_sizeof(x:String) -> String {
     format!("sizeof( {} )", x)
 }
 
-pub fn gen_size_in_byte(param: &TypedParameter) -> WeldResult<String> {
-    match param.ty {
+pub fn gen_size_in_byte_typed(param: &TypedParameter) -> WeldResult<String> {
+    let name = &param.name.name;
+    gen_size_in_byte(param.ty.clone(), name)
+}
+
+pub fn gen_size_in_byte(ty: Type, name: &String) -> WeldResult<String> {
+    match ty {
         Type::Vector(ref boxx) => {
-            let size_name = gen_name_size(param);
+            let size_name = gen_name_size(name);
             let kind_name = gen_scalar_type(boxx).unwrap();
             Ok(format!("{} * {}", size_name, gen_sizeof(kind_name)))
         }
@@ -96,9 +132,9 @@ pub fn gen_name(param: &TypedParameter) -> String {
     param.name.name.clone()
 }
 
-pub fn gen_var(param: &TypedParameter) -> WeldResult<String> {
-    let name = &param.name.name;
-    match param.ty {
+
+pub fn gen_var(ty: Type, name: &String) -> WeldResult<String> {
+    match ty {
         Type::Scalar(scalar_kind) => {
             let s = format!("{} {}",
                     gen_scalar_type_from_kind(scalar_kind),
@@ -113,36 +149,41 @@ pub fn gen_var(param: &TypedParameter) -> WeldResult<String> {
             );
             Ok(vec_arg)
         },
-        _ => return weld_err!("Not supported result type.")
+        _ => return weld_err!("Not supported result type for gen_var.")
     }
 }
 
-pub fn gen_name_size(param: &TypedParameter) -> String {
-    format!("{}{}", param.name.name, SDACCEL_SIZE_SUFFIX)
+
+pub fn gen_var_typed(param: &TypedParameter) -> WeldResult<String> {
+    let name = &param.name.name;
+    gen_var(param.ty.clone(), name)
 }
 
-pub fn gen_arg(param: &TypedParameter) -> WeldResult<Vec<String>>{
+pub fn gen_name_size(name: &String) -> String {
+    format!("{}{}", name, SDACCEL_SIZE_SUFFIX)
+}
+
+pub fn gen_arg(ty: Type, name: &String) -> WeldResult<Vec<String>> {
     let mut result = Vec::new();
 
-    match param.ty {
+    match ty {
         Type::Scalar(_) => {
-            result.push(gen_var(param).unwrap());
+            result.push(gen_var(ty, name).unwrap());
         },
         Type::Vector(_) => {
-            let size = TypedParameter {
-                name : Symbol {
-                    name : gen_name_size(param),
-                    id : 0
-                },
-                ty : Type::Scalar(SDACCEL_SIZE_KIND)
-            };
             //// Actual vector
-            result.push(gen_var(param).unwrap());
-            result.push(gen_var(&size).unwrap());
+            result.push(gen_var(ty, name).unwrap());
+            result.push(gen_var(Type::Scalar(SDACCEL_SIZE_KIND), &gen_name_size(name)).unwrap());
         },
-        _ => return weld_err!("Not supported result type.")
-    }
+        _ => return weld_err!("Not supported result type for gen_arg."),
+    };
     Ok(result)
+
+}
+
+pub fn gen_arg_type(param: &TypedParameter) -> WeldResult<Vec<String>>{
+    let name = &param.name.name;
+    gen_arg(param.ty.clone(), name)
 }
 
 pub fn get_sdaccel_type_from_kind(scalar_kind: ScalarKind) -> SDAccelType {
@@ -153,13 +194,10 @@ pub fn get_sdaccel_type_from_kind(scalar_kind: ScalarKind) -> SDAccelType {
     }
 }
 
-pub fn gen_set_arg(param: &TypedParameter, index: &mut i32, mut kernel: SDAccelVar)
-    -> WeldResult<Vec<String>>{
+pub fn gen_set_arg(ty: Type, name: &String, index: &mut i32, mut kernel: SDAccelVar) -> WeldResult<Vec<String>> {
     let mut vars = Vec::new();
     let mut result = Vec::new();
-    let name = &param.name.name;
-
-    match param.ty {
+    match ty {
         Type::Scalar(scalar_kind) => {
             vars.push(
                 SDAccelVar {
@@ -174,7 +212,7 @@ pub fn gen_set_arg(param: &TypedParameter, index: &mut i32, mut kernel: SDAccelV
         Type::Vector(_) => {
             let size = SDAccelVar {
                 sym : Symbol {
-                    name : gen_name_size(param),
+                    name : gen_name_size(name),
                     id : 0
                 },
                 ty : SDAccelType::CLInt
@@ -192,7 +230,6 @@ pub fn gen_set_arg(param: &TypedParameter, index: &mut i32, mut kernel: SDAccelV
         },
         _ => return weld_err!("Not supported vars type.")
     }
-
     for mut var in vars {
         result.push(SDAccelFuncBuilder {
             ty: SDAccelFuncType::XCLSetKernelArg,
@@ -200,14 +237,107 @@ pub fn gen_set_arg(param: &TypedParameter, index: &mut i32, mut kernel: SDAccelV
             kernel.gen_name(),
             index.to_string(),
             gen_sizeof(var.gen_typename()),
-            var.gen_name(),
+            var.gen_name_sim(),
             ]
         }.emit());
         *index = *index + 1;
 
     }
-
     Ok(result)
 
 }
 
+pub fn gen_set_arg_typed(param: &TypedParameter, index: &mut i32, mut kernel: SDAccelVar)
+    -> WeldResult<Vec<String>>{
+    let name = &param.name.name;
+    gen_set_arg(param.ty.clone(), name, index, kernel)
+}
+
+pub fn OCL_CHECK(s:String) -> String {
+    format!("OCL_CHECK({});",s)
+}
+
+pub fn gen_comment(comment: &str) -> String{
+    format!("//{}", comment)
+}
+
+pub fn gen_name_result(index: usize) -> String {
+    format!("{}{}", SDACCEL_RESULT_NAME, index)
+}
+
+pub fn gen_wait_event(index: usize, events: &mut SDAccelVar) -> String {
+    SDAccelFuncBuilder {
+        ty: SDAccelFuncType::CLWaitForEvents,
+        args: vec![
+            format!("{}", index),
+            events.gen_var_attr("data()"),
+        ]
+    }.emit_line()
+}
+
+pub fn get_release(e: &SDAccelVar) -> WeldResult<String> {
+    let name = e.gen_name();
+    match e.ty {
+        SDAccelType::CLEvent => {
+            let s = SDAccelFuncBuilder {
+                ty: SDAccelFuncType::CLReleaseEvent,
+                args: vec![name]
+            }.emit_line();
+            Ok(s)
+        },
+        SDAccelType::CLMem => {
+            let s = SDAccelFuncBuilder {
+                ty: SDAccelFuncType::CLReleaseMemObject,
+                args: vec![name]
+            }.emit_line();
+            Ok(s)
+        },
+        SDAccelType::CLKernel => {
+            let s = SDAccelFuncBuilder {
+                ty: SDAccelFuncType::CLReleaseKernel,
+                args: vec![name]
+            }.emit_line();
+            Ok(s)
+        },
+        SDAccelType::CLProgram => {
+            let s = SDAccelFuncBuilder {
+                ty: SDAccelFuncType::CLReleaseProgram,
+                args: vec![name]
+            }.emit_line();
+            Ok(s)
+        },
+        SDAccelType::XCLWorld => {
+            let s = SDAccelFuncBuilder {
+                ty: SDAccelFuncType::XCLReleaseWorld,
+                args: vec![name]
+            }.emit_line();
+            Ok(s)
+        },
+        SDAccelType::Vector(ref x, _) => {
+            match **x{
+                SDAccelType::CLEvent => {
+                    // Hard coding for now
+                    let mut s = format!("for (auto event: {})\n", &name);
+                    s.push_str(&SDAccelFuncBuilder {
+                        ty: SDAccelFuncType::CLReleaseEvent,
+                        args: vec![
+                            "event".to_string()
+                        ]
+                    }.emit_line());
+                    Ok(s)
+
+                }
+                _ => weld_err!("Get release event wrong type")
+            }
+        },
+        SDAccelType::CLCommandQueue => {
+            let s = SDAccelFuncBuilder {
+                ty: SDAccelFuncType::CLReleaseCommandQueue,
+                args: vec![name]
+            }.emit_line();
+            Ok(s)
+        },
+        _ => weld_err!("Get release event wrong type")
+    }
+
+}

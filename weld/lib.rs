@@ -329,10 +329,17 @@ pub unsafe extern "C" fn weld_module_compile(code: *const c_char,
     info!("Started compiling program");
 
     if conf.sdaccel {
-        let _module = sdaccel::compile_program(
+        let module = sdaccel::compile_program(
             &parsed.unwrap(),
             &conf.optimization_passes);
 
+        if let Err(ref e) = module {
+            err.errno = WeldRuntimeErrno::CompileError;
+            err.message = CString::new(e.description().to_string()).unwrap();
+            return std::ptr::null_mut();
+        }
+
+        info!("Done weld_module_compile");
         return std::ptr::null_mut();
     } else {
         let module = llvm::compile_program(&parsed.unwrap(), &conf, &mut stats);
