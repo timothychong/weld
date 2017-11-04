@@ -36,7 +36,15 @@ pub fn gen_scalar_type_from_kind(scalar_kind: ScalarKind) -> String {
 pub fn gen_scalar_type(ty: &Type) -> WeldResult<String> {
     match *ty {
         Type::Scalar(scalar_kind) => Ok(gen_scalar_type_from_kind(scalar_kind)),
-        _ => weld_err!("Not supported gen_scalar type.")
+        Type::Vector(ref s) => {
+            match **s {
+                Type::Scalar(kind) =>{
+                    Ok(format!{"{} *", gen_scalar_type_from_kind(kind)})
+                }
+                _ => weld_err!("Not supported gen_scalar type inside vector. {:?} ", ty)
+            }
+        }
+        _ => weld_err!("Not supported gen_scalar type. {:?} ", ty)
     }
 }
 

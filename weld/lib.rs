@@ -57,6 +57,7 @@ pub mod expr_hash;
 pub mod sdaccel;
 pub mod sdaccel_util;
 pub mod sdaccel_type;
+pub mod sdaccel_kernel;
 
 
 pub mod easy_ll;

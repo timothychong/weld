@@ -11,6 +11,7 @@ use super::code_builder::*;
 
 use super::sdaccel_util::*;
 use super::sdaccel_type::*;
+use super::sdaccel_kernel::*;
 
 //Writing OpenCl output to file
 use std::fs::File;
@@ -18,6 +19,8 @@ use std::io::prelude::*;
 
 
 pub struct SDAccelProgram {
+
+    // HOST
     pub sym_gen: SymbolGenerator,
     pub ret_ty: Vec<Type>,
     pub ret_ty_cl: Vec<SDAccelVar>,
@@ -32,10 +35,10 @@ pub struct SDAccelProgram {
     command_queue: SDAccelVar,
     world: SDAccelVar,
     kernel: SDAccelVar,
+
 }
 
 pub fn gen_new_cl_var(generator: &mut SymbolGenerator, ty: SDAccelType) ->
-
     SDAccelVar {
     let sym = generator.new_symbol(&sym_key_from_sdacceltype(ty.clone()));
     SDAccelVar{
@@ -64,7 +67,7 @@ impl SDAccelProgram {
             events: Vec::new(),
             world: world,
             kernel: kernel,
-            buffers: Vec::new()
+            buffers: Vec::new(),
         };
         match *ret_ty {
             Type::Function(_, ref rt) => prog.ret_ty.push(*rt.clone()),
@@ -374,12 +377,19 @@ pub fn ast_to_sdaccel(expr: &TypedExpr) -> WeldResult<String> {
         let _release_res = prog.release();
         prog.main.add_line("");
 
+        //let _a = gen_expr(body);
+        let mut kernel_prog = SDAccelKernel::new();
+        let first_block = kernel_prog.funcs[0].add_block();
+        let (res_func, res_block, res_sym) = gen_expr(body, &mut kernel_prog, 0, first_block)?;
+
+        println!("kernel prog\n:{}", kernel_prog);
+
         let mut final_host = CodeBuilder::new();
         final_host.add(with_input);
         final_host.add_code(&prog.main);
 
         let mut file = File::create("host.cpp")?;
-        println!("{}", final_host.result());
+        //println!("{}", final_host.result());
         file.write_all(final_host.result().as_bytes())?;
 
         Ok(String::from("TRIAL"))
