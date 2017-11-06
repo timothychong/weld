@@ -7,10 +7,25 @@ use super::ast::LiteralKind::*;
 use super::error::*;
 use super::util::SymbolGenerator;
 use super::sdaccel_util::*;
+use super::pretty_print::*;
 
+
+pub enum Attribute {
+    AlwaysInline,
+}
+
+impl fmt::Display for Attribute {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match *self {
+            Attribute::AlwaysInline => write!(f, "always_inline")
+        }
+
+    }
+}
 
 pub type BasicBlockId = usize;
 pub type FunctionId = usize;
+
 fn join<T: Iterator<Item = String>>(start: &str, sep: &str, end: &str, strings: T) -> String {
     let mut res = String::new();
     res.push_str(start);
@@ -23,6 +38,9 @@ fn join<T: Iterator<Item = String>>(start: &str, sep: &str, end: &str, strings: 
     res.push_str(end);
     res
 }
+
+
+
 
 pub fn print_literal(lit: &LiteralKind) -> String {
     match *lit {
@@ -152,6 +170,7 @@ impl SDAccelKernel {
             params: HashMap::new(),
             blocks: vec![],
             locals: HashMap::new(),
+            attr: vec![],
         };
         self.funcs.push(func);
         self.funcs.len() - 1
@@ -176,6 +195,8 @@ pub struct SDAccelFunction {
     pub blocks: Vec<BasicBlock>,
     pub locals: HashMap<Symbol, Type>,
     pub params: HashMap<Symbol, Type>,
+    pub attr: Vec<Attribute>,
+
 }
 
 impl SDAccelFunction {
@@ -187,6 +208,10 @@ impl SDAccelFunction {
         };
         self.blocks.push(block);
         self.blocks.len() - 1
+    }
+
+    pub fn func_name(& self) -> String {
+        format!("func_{}", self.id)
     }
 }
 
@@ -347,6 +372,15 @@ impl fmt::Display for BasicBlock {
 
 impl fmt::Display for SDAccelFunction {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        if self.id == 0 {
+            write!(f, "__kernel ")?;
+        }
+       for attr in &self.attr {
+            write!(f, "__attribute__ (({}))\n", attr)?;
+        }
+       write!(f,"{}(", self.func_name())?;
+       //Params here
+       write!(f,")")?;
         write!(f, "{{\n")?;
         //write!(f, "Params:\n")?;
         //let params_sorted: BTreeMap<&Symbol, &Type> = self.params.iter().collect();
@@ -379,12 +413,12 @@ pub fn gen_expr(expr: &TypedExpr,
                 prog: &mut SDAccelKernel,
                 cur_func: FunctionId,
                 cur_block: BasicBlockId,
-                ) -> WeldResult<(FunctionId, BasicBlockId, Symbol)> {
+                ) -> WeldResult<Option<Symbol>> {
 
     use self::Statement::*;
     match expr.kind {
 
-        ExprKind::Ident(ref sym) => Ok((cur_func, cur_block, sym.clone())),
+        ExprKind::Ident(ref sym) => Ok(Some(sym.clone())),
 
         ExprKind::Literal(lit) => {
             let res_sym = prog.add_local(&expr.ty, cur_func);
@@ -392,7 +426,7 @@ pub fn gen_expr(expr: &TypedExpr,
                                                                      output: res_sym.clone(),
                                                                      value: lit,
                                                                  });
-            Ok((cur_func, cur_block, res_sym))
+            Ok(None)
         }
 
         ExprKind::Let {
@@ -400,14 +434,13 @@ pub fn gen_expr(expr: &TypedExpr,
             ref value,
             ref body,
         } => {
-            let (cur_func, cur_block, val_sym) = gen_expr(value, prog, cur_func, cur_block)?;
+            let val = gen_expr(value, prog, cur_func, cur_block).unwrap().unwrap();
             prog.add_local_named(&value.ty, name, cur_func);
             prog.funcs[cur_func].blocks[cur_block].add_statement(Assign {
                                                                      output: name.clone(),
-                                                                     value: val_sym,
+                                                                     value: val.clone(),
                                                                  });
-            let (cur_func, cur_block, res_sym) = gen_expr(body, prog, cur_func, cur_block)?;
-            Ok((cur_func, cur_block, res_sym))
+            gen_expr(body, prog, cur_func, cur_block)
         }
 
         //ExprKind::BinOp {
@@ -493,15 +526,12 @@ pub fn gen_expr(expr: &TypedExpr,
             //println!("Merge")
         //}
 
-        //ExprKind::Res { ref builder } => {
-            ////println!("Res builder kind: {}", print_expr(expr));
-            //println!("Res builder kind");
-            //if let Type::Builder(ref kind, _) = builder.ty {
-                ////gen_expr(builder);
-            //} else {
-                ////weld_err!("Res of not a builder: {}", print_expr(builder))
-            //}
-        //}
+        ExprKind::Res { ref builder } => {
+            let res_sym = prog.add_local(&expr.ty, cur_func);
+            let builder_sym = gen_expr(builder, prog, cur_func, cur_block)?;
+            //println!("Res builder kind: {}", print_expr(expr));
+            Ok(builder_sym)
+        }
 
         //ExprKind::NewBuilder(ref arg) => {
             //println!("New builder")
@@ -532,23 +562,44 @@ pub fn gen_expr(expr: &TypedExpr,
             ref builder,
             ref func,
         } => {
-            if let ExprKind::Lambda {
-                       ref params,
-                       ref body,
-                   } = func.kind {
-                let body_block = prog.funcs[body_func].add_block();
 
+            match iters[0].kind {
+                IterKind::ScalarIter => {weld_err!("Error: ScalarIter not supported in for")},
+                IterKind::SimdIter => {
+                    if let ExprKind::Lambda {
+                               ref params,
+                               ref body,
+                           } = func.kind {
+                        let body_func = prog.add_func();
+                        prog.funcs[body_func].attr.push(Attribute::AlwaysInline);
 
+                        for iter in iters {
+                            match iter.kind {
+                                IterKind::SimdIter => {
+                                    let data = gen_expr(&iter.data, prog, cur_func, cur_block).unwrap().unwrap();
+                                    println!("DATA: {}", data);
+                                    //Ok((cur_func, cur_block, Symbol{name: "foo".to_string(), id:0}))
+                                },
+                                _ => {}//weld_err!("Argument to For was not a Lambda: {}", print_expr(func))
+                            }
+                        }
+                        //Ok((cont_func, cont_block, builder_sym))
+                        //Ok((cur_func, cur_block, Symbol{name: "foo".to_string(), id:0}))
+                        Ok(None)
+                    } else {
+                        weld_err!("Argument to For was not a Lambda: {}", print_expr(func))
+                    }
 
-                Ok((cont_func, cont_block, builder_sym))
-            } else {
-                weld_err!("Argument to For was not a Lambda: {}", print_expr(func))
+                },
+                IterKind::FringeIter => {
+                    gen_expr(builder, prog, cur_func, cur_block)
+                },
             }
         }
-        _ => println!("Unsupported expression: {}", print_expr(expr)),
+        //_ => println!("Unsupported expression: {}", print_expr(expr)),
         _ => {
             println!("Unsupported expression: ");
-            Ok((cur_func, cur_block, Symbol{name: "foo".to_string(), id:0}))
+            Ok(None)
         }
     }
 
