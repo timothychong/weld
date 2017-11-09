@@ -8,7 +8,10 @@ pub const SDACCEL_ARG_POINTER: &'static str = "* ";
 pub const SDACCEL_SIZE_SUFFIX: &'static str = "_size";
 pub const SDACCEL_SIZE_IN_BYTES_SUFFIX: &'static str = "_size_in_byte";
 pub const SDACCEL_SIZE_KIND: ScalarKind = ScalarKind::U32;
+pub const SDACCEL_SIZE_TYPE: Type = Type::Scalar(SDACCEL_SIZE_KIND);
+pub const SDACCEL_COUNTER_TYPE: Type = Type::Scalar(ScalarKind::I64);
 pub const SDACCEL_BUFFER_MEM_SUFFIX: &'static str = "_mbuf";
+pub const SDACCEL_BUFFER_BUILD_PREFIX: &'static str = "build_buff_";
 
 pub const SDACCEL_RESULT_NAME: &'static str = "result";
 
@@ -66,6 +69,13 @@ pub fn gen_line_size_in_byte(ty: Type, name: &String) -> String {
 
 pub fn gen_line_size_in_byte_typed(param: &TypedParameter) -> String {
     assign( gen_var_size_in_byte_typed(param), gen_size_in_byte_typed(param).unwrap())
+}
+
+pub fn gen_sym_size_sym(sym: &Symbol) -> Symbol {
+    Symbol {
+        name: format!("{}{}", sym.name, SDACCEL_SIZE_SUFFIX),
+        id: sym.id
+    }
 }
 
 pub fn gen_name_buffer_mem(param: &TypedParameter) -> String {

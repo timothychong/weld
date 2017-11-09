@@ -380,7 +380,12 @@ pub fn ast_to_sdaccel(expr: &TypedExpr) -> WeldResult<String> {
         //let _a = gen_expr(body);
         let mut kernel_prog = SDAccelKernel::new();
         let first_block = kernel_prog.funcs[0].add_block();
+        for tp in params {
+            kernel_prog.funcs[0].params.insert(tp.name.clone(), tp.ty.clone());
+        }
         let sym = gen_expr(body, &mut kernel_prog, 0, first_block)?;
+
+        kernel_prog.update_all_func_size_param();
 
         println!("kernel prog\n:{}", kernel_prog);
 
