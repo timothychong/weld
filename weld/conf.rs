@@ -115,7 +115,7 @@ pub fn parse(conf: &WeldConf) -> WeldResult<ParsedConf> {
         dump_code: DumpCodeConf {
             enabled: dump_code_enabled,
             dir: dump_code_dir,
-        }
+        },
         sdaccel: sdaccel
     })
 }

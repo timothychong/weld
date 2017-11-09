@@ -101,6 +101,7 @@ pub fn apply_opt_passes(expr: &mut TypedExpr, opt_passes: &Vec<Pass>, stats: &mu
         let end = PreciseTime::now();
         stats.pass_times.push((pass.pass_name(), start.to(end)));
         trace!("After {} pass:\n{}", pass.pass_name(), print_typed_expr(&expr));
+        println!("After {} pass:\n{}", pass.pass_name(), print_typed_expr(&expr));
     }
     Ok(())
 }

@@ -330,9 +330,7 @@ pub unsafe extern "C" fn weld_module_compile(code: *const c_char,
     info!("Started compiling program");
 
     if conf.sdaccel {
-        let module = sdaccel::compile_program(
-            &parsed.unwrap(),
-            &conf.optimization_passes);
+        let module = sdaccel::compile_program(&parsed.unwrap(), &conf, &mut stats);
 
         if let Err(ref e) = module {
             err.errno = WeldRuntimeErrno::CompileError;
@@ -351,14 +349,11 @@ pub unsafe extern "C" fn weld_module_compile(code: *const c_char,
             err.message = CString::new(e.description().to_string()).unwrap();
             return std::ptr::null_mut();
         }
+        debug!("\n{}\n", stats.pretty_print());
         info!("Done weld_module_compile");
         Box::into_raw(Box::new(module.unwrap()))
     }
 
-    debug!("\n{}\n", stats.pretty_print());
-
-    info!("Done weld_module_compile");
-    Box::into_raw(Box::new(module.unwrap()))
 }
 
 #[no_mangle]

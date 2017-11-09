@@ -17,6 +17,11 @@ use super::sdaccel_kernel::*;
 use std::fs::File;
 use std::io::prelude::*;
 
+use super::conf::ParsedConf;
+use super::CompilationStats;
+use time::PreciseTime;
+use super::transforms::uniquify;
+
 
 pub struct SDAccelProgram {
 
@@ -319,35 +324,52 @@ impl SDAccelProgram {
     }
 }
 
-pub fn apply_opt_passes(expr: &mut TypedExpr, opt_passes: &Vec<Pass>) -> WeldResult<()> {
+pub fn apply_opt_passes(expr: &mut TypedExpr, opt_passes: &Vec<Pass>, stats: &mut CompilationStats) -> WeldResult<()> {
     for pass in opt_passes {
+        let start = PreciseTime::now();
         pass.transform(expr)?;
+        let end = PreciseTime::now();
+        stats.pass_times.push((pass.pass_name(), start.to(end)));
         trace!("After {} pass:\n{}", pass.pass_name(), print_typed_expr(&expr));
     }
     Ok(())
 }
 
-pub fn compile_program(program: &Program, opt_passes: &Vec<Pass>)
-        -> WeldResult<String> {
+pub fn compile_program(program: &Program, conf: &ParsedConf, stats: &mut CompilationStats)
+        -> WeldResult<()> {
 
     let mut expr = macro_processor::process_program(program)?;
     trace!("After macro substitution:\n{}\n", print_typed_expr(&expr));
 
-    let _ = transforms::uniquify(&mut expr)?;
+    let start = PreciseTime::now();
+    uniquify::uniquify(&mut expr)?;
+    let end = PreciseTime::now();
+
+    let mut uniquify_dur = start.to(end);
+
+    let start = PreciseTime::now();
     type_inference::infer_types(&mut expr)?;
     let mut expr = expr.to_typed()?;
     trace!("After type inference:\n{}\n", print_typed_expr(&expr));
+    let end = PreciseTime::now();
+    stats.weld_times.push(("Type Inference".to_string(), start.to(end)));
 
-    apply_opt_passes(&mut expr, opt_passes)?;
+    apply_opt_passes(&mut expr, &conf.optimization_passes, stats)?;
 
-    transforms::uniquify(&mut expr)?;
-    debug!("Optimized Weld program:\n{}\n", print_expr(&expr));
+    let start = PreciseTime::now();
+    uniquify::uniquify(&mut expr)?;
+    let end = PreciseTime::now();
+    uniquify_dur = uniquify_dur + start.to(end);
 
-    println!("Optimized Weld program:\n{}\n", print_expr(&expr));
+    stats.weld_times.push(("Uniquify outside Passes".to_string(), uniquify_dur));
 
     println!("Generating OpenCL");
 
-    ast_to_sdaccel(&expr)
+    let start = PreciseTime::now();
+    ast_to_sdaccel(&expr);
+    let end = PreciseTime::now();
+    stats.weld_times.push(("AST to SDACCEL".to_string(), start.to(end)));
+    Ok(())
 }
 
 pub fn ast_to_sdaccel(expr: &TypedExpr) -> WeldResult<String> {
