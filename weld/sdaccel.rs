@@ -22,6 +22,7 @@ use super::CompilationStats;
 use time::PreciseTime;
 use super::transforms::uniquify;
 
+use std::collections::{BTreeMap, HashMap};
 
 pub struct SDAccelProgram {
 
@@ -34,8 +35,10 @@ pub struct SDAccelProgram {
     pub output_buf: Vec<SDAccelVar>,
     main: CodeBuilder,
 
+
+    pub map_var_buff:HashMap<Symbol, SDAccelVar>,
+
     // For releasing
-    buffers: Vec<SDAccelVar>,
     events: Vec<SDAccelVar>,
     command_queue: SDAccelVar,
     world: SDAccelVar,
@@ -46,6 +49,15 @@ pub struct SDAccelProgram {
 pub fn gen_new_cl_var(generator: &mut SymbolGenerator, ty: SDAccelType) ->
     SDAccelVar {
     let sym = generator.new_symbol(&sym_key_from_sdacceltype(ty.clone()));
+    SDAccelVar{
+        sym: sym,
+        ty: ty,
+    }
+}
+
+pub fn gen_new_cl_var_name(generator: &mut SymbolGenerator, ty: SDAccelType, name:&String) ->
+    SDAccelVar {
+    let sym = generator.new_symbol(&name);
     SDAccelVar{
         sym: sym,
         ty: ty,
@@ -72,7 +84,7 @@ impl SDAccelProgram {
             events: Vec::new(),
             world: world,
             kernel: kernel,
-            buffers: Vec::new(),
+            map_var_buff: HashMap::new(),
         };
         match *ret_ty {
             Type::Function(_, ref rt) => prog.ret_ty.push(*rt.clone()),
@@ -84,6 +96,10 @@ impl SDAccelProgram {
     }
     pub fn new_cl_var(&mut self, ty:SDAccelType) -> SDAccelVar {
         gen_new_cl_var(&mut self.sym_gen, ty)
+    }
+
+    pub fn new_cl_var_name(&mut self, ty:SDAccelType, name:&String) -> SDAccelVar {
+        gen_new_cl_var_name(&mut self.sym_gen, ty, name)
     }
 }
 
@@ -174,50 +190,85 @@ impl SDAccelProgram {
                     self.main.add_line(gen_line_buffer_mem(&param, &mut cl,
                                                            &mut mem_var,
                                                            &mut self.world));
-                    self.buffers.push(mem_var);
+                    self.map_var_buff.insert(gen_sym_size_sym(&param.name), cl.clone());
+                    self.map_var_buff.insert(param.name.clone(), mem_var.clone());
                 }
                 _ => {}
             }
 
         }
-        for (i, x) in self.ret_ty.clone().iter().enumerate() {
-            match *x {
-                Type::Vector(_) =>  {
-                    let mut mem_var = self.new_cl_var(SDAccelType::CLMem);
-                    self.main.add_line(gen_line_size_in_byte(x.clone(),
-                                       &gen_name_result(i)));
-                    self.main.add_line(mem_var.gen_declare());
-                    self.main.add_line(
-                        gen_line_alloc_output_buffer_mem(&mut mem_var,
-                                                         i,
-                                                         &mut self.world)
-                    );
-                    self.output_buf.push(mem_var)
-                },
-                _ => {}
-            }
-        }
+        //for (i, x) in self.ret_ty.clone().iter().enumerate() {
+            //match *x {
+                //Type::Vector(_) =>  {
+                    //let mut mem_var = self.new_cl_var(SDAccelType::CLMem);
+                    //self.main.add_line(mem_var.gen_declare());
+                    //self.main.add_line(
+                        //gen_line_alloc_output_buffer_mem(&mut mem_var,
+                                                         //i,
+                                                         //&mut self.world)
+                    //);
+                    //self.output_buf.push(mem_var)
+                //},
+                //_ => {}
+            //}
+        //}
 
         // Output buffer
         Ok(())
     }
 
-    pub fn set_args(&mut self) {
+    pub fn set_kernel_buffer(&mut self, prog: & SDAccelKernel) {
+        let sorted: BTreeMap<&Symbol, &Type> = prog.buffs.iter().collect();
+        for (i, x) in prog.buffs.iter().enumerate() {
+            let (name, ty) = x;
+            let mut mem_var = self.new_cl_var_name(SDAccelType::CLMem, &name.name);
+            let s = prog.find_var_target(&name);
+            self.main.add_line(
+                gen_line_size_in_byte_buff(
+                    ty.clone(),
+                    &name.name,
+                    &s.name,
+                    ));
+            self.main.add_line(mem_var.gen_declare());
+            self.main.add_line(
+                gen_line_alloc_output_buffer_mem_builder(&mut mem_var,
+                                                 i,
+                                                 &mut self.world)
+            );
+        }
+    }
+
+    pub fn set_args(&mut self, prog: &SDAccelKernel) {
         let mut index:i32 = 0;
         for param in &self.top_params {
+            let buff = self.map_var_buff.get(&param.name).unwrap().clone();
             for line in
-                gen_set_arg_typed(param, &mut index, self.kernel.clone()
+                gen_set_arg(
+                    &param,
+                    &mut index,
+                    self.kernel.clone(),
+                    false
                                   ).unwrap() {
                 self.main.add_line(line);
             }
         }
 
-        for (i, x) in self.ret_ty.iter().enumerate() {
-            for line in gen_set_arg(x.clone() ,
-                                    &gen_name_result(i),
-                                    &mut index,
-                                    self.kernel.clone()
-                      ).unwrap() {
+        // Buffers
+        let sorted: BTreeMap<&Symbol, &Type> = prog.buffs.iter().collect();
+        for (i, x) in sorted.iter().enumerate() {
+            let (name, ty) = x;
+
+            let p = TypedParameter {
+                ty: (*ty).clone(),
+                name: (*name).clone(),
+            };
+            for line in
+                gen_set_arg(
+                    &p,
+                    &mut index,
+                    self.kernel.clone(),
+                    true
+                                  ).unwrap() {
                 self.main.add_line(line);
             }
         }
@@ -262,7 +313,8 @@ impl SDAccelProgram {
         self.events.push(kernel_event);
     }
 
-    pub fn enqueue_buffer_read(&mut self) {
+    pub fn enqueue_buffer_read(&mut self, build_buffer: &Symbol,
+                               ty: &Type, size_sym: &Symbol) {
         let mut events = Vec::new();
         for i in self.ret_ty.clone() {
             events.push(self.new_cl_var(SDAccelType::CLEvent));
@@ -272,36 +324,34 @@ impl SDAccelProgram {
             SDAccelType::Vector(Box::new((SDAccelType::CLEvent)), num));
         self.main.add_line(events_cl.gen_declare());
 
-        for (i, r) in self.ret_ty.iter().enumerate() {
-            match *r {
-                Type::Vector(_) =>  {
-                    self.main.add_line(events[i].gen_declare());
-                    self.main.add_line(
-                        OCL_CHECK(
-                        SDAccelFuncBuilder {
-                            ty: SDAccelFuncType::CLEnqueueReadBuffer,
-                            args: vec![
-                                self.command_queue.gen_name(),
-                                self.output_buf[i].gen_name(),
-                                "CL_TRUE".to_string(),
-                                "0".to_string(),
-                                gen_name_size_in_byte(
-                                    &gen_name_result(i)),
-                                gen_name_result(i),
-                                "0".to_string(),
-                                "NULL".to_string(),
-                                events_cl.gen_ref_idx(i)
-                            ]
-                        }.emit())
-                    );
-                }
-                // TODO
-                Type::Scalar(_) => {
-                    self.main.add_line("enqueuebuffer_read not implmeneted yet");
-                },
-                _ => {
+        match *ty {
+            Type::Vector(_) =>  {
+                self.main.add_line(events[0].gen_declare());
+                self.main.add_line(
+                    OCL_CHECK(
+                    SDAccelFuncBuilder {
+                        ty: SDAccelFuncType::CLEnqueueReadBuffer,
+                        args: vec![
+                            self.command_queue.gen_name(),
+                            build_buffer.clone().name,
+                            "CL_TRUE".to_string(),
+                            "0".to_string(),
+                            gen_name_size_in_byte(
+                                &build_buffer.name),
+                            gen_name_result(0),
+                            "0".to_string(),
+                            "NULL".to_string(),
+                            events_cl.gen_ref_idx(0)
+                        ]
+                    }.emit())
+                );
+            }
+            // TODO
+            Type::Scalar(_) => {
+                self.main.add_line("enqueuebuffer_read not implmeneted yet");
+            },
+            _ => {
 
-                }
             }
         }
         //Waiting for result transfer
@@ -375,6 +425,24 @@ pub fn compile_program(program: &Program, conf: &ParsedConf, stats: &mut Compila
 pub fn ast_to_sdaccel(expr: &TypedExpr) -> WeldResult<String> {
     if let ExprKind::Lambda { ref params, ref body } = expr.kind {
 
+        let mut kernel_prog = SDAccelKernel::new();
+        let first_block = kernel_prog.funcs[0].add_block();
+        for tp in params {
+            kernel_prog.funcs[0].params.insert(tp.name.clone(), tp.ty.clone());
+        }
+        //Need to update to support struct
+        let sym = gen_expr(body, &mut kernel_prog, 0, first_block)?.unwrap().clone();
+        let ty = kernel_prog.buffs.get(&sym).unwrap().clone();
+        let sym_size = kernel_prog.find_var_target(&sym);
+
+        println!("{}: ty: {:?} {:?}", sym, ty, sym_size);
+
+        //for k in &kernel_prog.buffs {
+            //let s = kernel_prog.find_var_target(&k.name);
+            //println!("{:?}: {:?}", s, k);
+
+        //}
+
         let mut prog = SDAccelProgram::new(&expr.ty, params).unwrap();
         prog.sym_gen = SymbolGenerator::from_expression(expr);
 
@@ -386,38 +454,35 @@ pub fn ast_to_sdaccel(expr: &TypedExpr) -> WeldResult<String> {
         prog.main.add_line("");
         let _buffer_res = prog.allocate_buffer();
         prog.main.add_line("");
+        let _set_kernel_buff_res = prog.set_kernel_buffer(&kernel_prog);
+        prog.main.add_line("");
         //let _kernel_res = prog.get_kernel_and_queue();
         //prog.main.add_line("");
-        let _args_res = prog.set_args();
+        let _args_res = prog.set_args(&kernel_prog);
         prog.main.add_line("");
         let _work_size_res = prog.declare_work_size();
         prog.main.add_line("");
         let _enqcommand_res = prog.enqueue_command();
         prog.main.add_line("");
-        let _enqbuffread_res = prog.enqueue_buffer_read();
+        let _enqbuffread_res = prog.enqueue_buffer_read(&sym, &ty, &sym_size);
         prog.main.add_line("");
         let _release_res = prog.release();
-        prog.main.add_line("");
+        prog.main.add_line("}");
 
-        //let _a = gen_expr(body);
-        let mut kernel_prog = SDAccelKernel::new();
-        let first_block = kernel_prog.funcs[0].add_block();
-        for tp in params {
-            kernel_prog.funcs[0].params.insert(tp.name.clone(), tp.ty.clone());
-        }
-        let sym = gen_expr(body, &mut kernel_prog, 0, first_block)?;
 
         kernel_prog.update_all_func_size_param();
 
-        println!("kernel prog\n:{}", kernel_prog);
+        //println!("kernel prog\n:{}", kernel_prog);
 
         let mut final_host = CodeBuilder::new();
         final_host.add(with_input);
         final_host.add_code(&prog.main);
 
         let mut file = File::create("host.cpp")?;
-        //println!("{}", final_host.result());
+        let mut kernel_file = File::create("device.cl")?;
+        println!("{}", final_host.result());
         file.write_all(final_host.result().as_bytes())?;
+        kernel_file.write_all(format!("{}", kernel_prog).as_bytes())?;
 
         Ok(String::from("TRIAL"))
 
@@ -426,4 +491,3 @@ pub fn ast_to_sdaccel(expr: &TypedExpr) -> WeldResult<String> {
     }
 
 }
-

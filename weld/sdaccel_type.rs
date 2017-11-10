@@ -2,15 +2,15 @@ use super::ast::*;
 use super::sdaccel_util::*;
 use std::fmt;
 
-pub const SDACCEL_CL_INT_SYM_KEY: &'static str = "cl_int";
-pub const SDACCEL_CL_PROGRAM_SYM_KEY: &'static str = "cl_program";
-pub const SDACCEL_CL_KERNEL_SYM_KEY: &'static str = "cl_kernel";
-pub const SDACCEL_CL_MEM_SYM_KEY: &'static str = "cl_mem";
-pub const SDACCEL_CL_WORLD_SYM_KEY: &'static str = "cl_world";
-pub const SDACCEL_CL_COMMMANDQ_SYM_KEY: &'static str = "cl_commandq";
-pub const SDACCEL_CL_EVENT_SYM_KEY: &'static str = "cl_event";
+pub const SDACCEL_CL_INT_SYM_KEY: &'static str = "my_int";
+pub const SDACCEL_CL_PROGRAM_SYM_KEY: &'static str = "my_program";
+pub const SDACCEL_CL_KERNEL_SYM_KEY: &'static str = "my_kernel";
+pub const SDACCEL_CL_MEM_SYM_KEY: &'static str = "my_mem";
+pub const SDACCEL_CL_WORLD_SYM_KEY: &'static str = "my_world";
+pub const SDACCEL_CL_COMMMANDQ_SYM_KEY: &'static str = "my_commandq";
+pub const SDACCEL_CL_EVENT_SYM_KEY: &'static str = "my_event";
 pub const SDACCEL_CL_VECTOR_SYM_KEY: &'static str = "myvector";
-#[derive(Clone)]
+#[derive(Clone, PartialEq, Hash, Eq)]
 pub enum SDAccelType {
     CLInt,
     CLProgram,
@@ -124,11 +124,13 @@ pub fn sym_key_from_sdacceltype(ty: SDAccelType) -> String {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, PartialEq, Hash, Eq)]
 pub struct SDAccelVar{
     pub sym: Symbol,
     pub ty: SDAccelType,
 }
+
+
 impl SDAccelVar{
 
     pub fn gen_typename(& self) -> String {
@@ -136,7 +138,11 @@ impl SDAccelVar{
     }
 
     pub fn gen_name(& self) -> String {
-        format!("{}{}", &self.sym.name, &self.sym.id)
+        if self.sym.id == 0 {
+            format!("{}", &self.sym.name)
+        } else {
+            format!("{}{}", &self.sym.name, &self.sym.id)
+        }
     }
 
     pub fn gen_name_sim(& self) -> String {

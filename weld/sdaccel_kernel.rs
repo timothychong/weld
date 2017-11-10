@@ -223,9 +223,8 @@ pub struct SDAccelKernel {
 
     pub funcs: Vec<SDAccelFunction>,
     pub sym_gen: SymbolGenerator,
-    pub buffs: Vec<Type>,
+    pub buffs: HashMap<Symbol, Type>,
     pub variable_map: HashMap<Symbol, Symbol>
-
 
     // This is for temporary storing things for code gen
 }
@@ -237,7 +236,7 @@ impl SDAccelKernel {
         let mut prog = SDAccelKernel {
             funcs: vec![],
             sym_gen: SymbolGenerator::new(),
-            buffs: vec![],
+            buffs: HashMap::new(),
             variable_map: HashMap::new()
         };
         //add main
@@ -253,6 +252,7 @@ impl SDAccelKernel {
             locals: HashMap::new(),
             attr: vec![],
             buffs: HashMap::new(),
+            buffs_size: HashMap::new(),
         };
         self.funcs.push(func);
         self.funcs.len() - 1
@@ -265,15 +265,16 @@ impl SDAccelKernel {
         }
     }
 
-    pub fn add_buff(&mut self, ty: &Type, func_id: FunctionId) -> WeldResult<(BuffId, Symbol)> {
+    pub fn add_buff(&mut self, ty: &Type, func_id: FunctionId)
+        -> WeldResult<(BuffId, Symbol)> {
 
         if let Type::Scalar(_) = *ty {
             let tyy = Type::Vector(Box::new(ty.clone()));
-            self.buffs.push(tyy.clone());
-            let id = self.buffs.len() - 1;
+            let id = self.buffs.len();
             let sym = self.sym_from_buffid(id);
             self.funcs[func_id].buffs.insert(sym.clone(), tyy.clone());
             self.funcs[0].buffs.insert(sym.clone(), tyy.clone());
+            self.buffs.insert(sym.clone(), tyy.clone());
             Ok((id, sym))
         } else {
             weld_err!("Error: add_buff not a scalar type")
@@ -302,7 +303,7 @@ impl SDAccelKernel {
         self.variable_map.insert(obj.clone(), target.clone());
     }
 
-    pub fn find_var_target(&mut self, target: &Symbol) -> Symbol {
+    pub fn find_var_target(& self, target: &Symbol) -> Symbol {
         let mut result = target.clone();
 
         while self.variable_map.contains_key(&result) {
@@ -340,6 +341,7 @@ pub struct SDAccelFunction {
     pub params: HashMap<Symbol, Type>,
     pub attr: Vec<Attribute>,
     pub buffs: HashMap<Symbol, Type>,
+    pub buffs_size: HashMap<Symbol, Type>,
 
 }
 
@@ -372,6 +374,9 @@ impl SDAccelFunction {
         let extra = extra_vec_with_size(&mut self.params);
         self.params.extend(extra);
 
+        let extra = extra_vec_with_size(&mut self.buffs);
+        self.buffs_size.extend(extra);
+
         for block in &mut self.blocks {
             for mut s in &mut block.statements{
                 if let Statement::Func {ref name, ref args,
@@ -379,9 +384,12 @@ impl SDAccelFunction {
                     let extra = extra_vec_with_size(args);
                     let mut newargs = args.clone();
                     newargs.extend(extra);
+                    let extra = extra_vec_with_size(buffs);
+                    let mut newargsbuff = buffs.clone();
+                    newargsbuff.extend(extra);
                     *s = Statement::Func {
                         args: newargs,
-                        buffs: buffs.clone(),
+                        buffs: newargsbuff,
                         name: name.clone(),
                     };
                 }
@@ -693,8 +701,26 @@ impl fmt::Display for SDAccelFunction {
                    |e| format!("{} {}", gen_scalar_type(e.1).unwrap(), e.0)
                    )))?;
 
+       if self.id > 0 {
+           let buffsize_sorted: BTreeMap<&Symbol, &Type> = self.buffs_size.iter().collect();
+           if buffsize_sorted.len() > 0 {
+               write!(f, ", ")?;
+           }
+           write!(f, "{}", join("", ", ", "",
+                   buffsize_sorted.iter().map(
+                       |e| format!("{} & {}", gen_scalar_type(e.1).unwrap(), e.0)
+                       )))?;
+       }
 
         write!(f, "){{\n\n")?;
+
+       if self.id == 0 {
+           let buffsize_sorted: BTreeMap<&Symbol, &Type> = self.buffs_size.iter().collect();
+            for (name, ty) in buffsize_sorted {
+                write!(f, "  {} {};\n", print_type(ty), name)?;
+            }
+       }
+
         let locals_sorted: BTreeMap<&Symbol, &Type> = self.locals.iter().collect();
         for (name, ty) in locals_sorted {
             write!(f, "  {} {};\n", print_type(ty), name)?;
@@ -954,18 +980,22 @@ pub fn gen_expr(expr: &TypedExpr,
                         let mut end:Vec<Statement> = Vec::new();
                         let mut inner:Vec<Statement> = Vec::new();
 
+                        let builder_sym = gen_expr(builder, prog, body_func, body_block)?.unwrap();
+                        let build_ty = prog.funcs[body_func].buffs.get(&builder_sym).unwrap().clone();
 
                         let lambda_builder = params[0].clone();
-                        let lambda_counter = params[1].clone();
+                        let lambda_counter = gen_sym_size_sym(&builder_sym).clone();
                         let lambda_var = params[2].clone();
 
                         let mut var_syms:Vec<Symbol> = Vec::new();
+                        let mut counter_syms:Vec<Symbol> = Vec::new();
 
                         // For each item in the iterators
                         for iter in iters {
                             match iter.kind {
                                 IterKind::ScalarIter => {
                                     let before_data = gen_expr(&iter.data, prog, cur_func, cur_block)?;
+
 
                                     //Get the symbol for the data
                                     let data:Symbol;
@@ -995,9 +1025,12 @@ pub fn gen_expr(expr: &TypedExpr,
                                         }
                                     };
                                     var_syms.push(data.clone());
-                                    prog.funcs[body_func].params.insert(data.clone(), ty);
+                                    prog.funcs[body_func].params.insert(data.clone(), ty.clone());
 
-                                    // Add references inside for loop for variable
+                                    prog.assign_var_map(
+                                        &data,
+                                        &builder_sym,
+                                    );
 
                                     //Create counter for iterator
                                     let counter_sym = prog.add_local(&SDACCEL_COUNTER_TYPE, body_func);
@@ -1026,6 +1059,7 @@ pub fn gen_expr(expr: &TypedExpr,
                                             })
                                         }
                                     );
+                                    counter_syms.push(counter_sym);
 
 
                                 }
@@ -1034,11 +1068,9 @@ pub fn gen_expr(expr: &TypedExpr,
                         }
 
 
-                        let builder_sym = gen_expr(builder, prog, body_func, body_block)?.unwrap();
-                        let build_ty = prog.funcs[body_func].buffs.get(&builder_sym).unwrap().clone();
 
-                        prog.funcs[body_func].add_func_counter(&lambda_counter.name);
-                        //println!("params: {:?}", params);
+                        //prog.funcs[body_func].add_func_counter(&lambda_counter.name);
+                        //
                         let new_inner_block = prog.funcs[body_func].add_inner_block();
                         let res_sym = gen_expr(body, prog, body_func, new_inner_block)?.unwrap();
 
@@ -1065,7 +1097,7 @@ pub fn gen_expr(expr: &TypedExpr,
                                         left: lambda_var.name.clone(),
                                         ty: lambda_var.ty.clone(),
                                         right: var_syms[0].clone(),
-                                        index: lambda_counter.name.clone(),
+                                        index: counter_syms[0].clone(),
                                     }
                                 );
                             }
@@ -1078,7 +1110,7 @@ pub fn gen_expr(expr: &TypedExpr,
                                             left: name_pre.clone(),
                                             ty: v.clone(),
                                             right: var_syms[i].clone(),
-                                            index: lambda_counter.name.clone(),
+                                            index: counter_syms[i].clone(),
                                         }
                                     );
                                 }
@@ -1096,23 +1128,23 @@ pub fn gen_expr(expr: &TypedExpr,
                         inner.push(
                             IndexAssignLeft{
                                 output: lambda_builder.name.clone(),
-                                index: lambda_counter.name.clone(),
+                                index: lambda_counter.clone(),
                                 value: res_sym
                             }
                         );
                         //Builder iterator
                         init.push(
                             AssignLiteral {
-                                output: lambda_counter.name.clone(),
+                                output: lambda_counter.clone(),
                                 value: LiteralKind::U32Literal(0),
                             }
                         );
 
                         end.push(
                             AssignStatement {
-                                output: lambda_counter.name.clone(),
+                                output: lambda_counter.clone(),
                                 right: Box::new(BinOpLiteralRight {
-                                    left: lambda_counter.name.clone(),
+                                    left: lambda_counter.clone(),
                                     op: BinOpKind::Add,
                                     right: LiteralKind::U32Literal(1),
                                 })
