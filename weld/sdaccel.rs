@@ -159,6 +159,7 @@ impl SDAccelProgram {
         );
 
         let mut err = self.new_cl_var(SDAccelType::CLInt);
+        self.main.add_line(err.gen_declare());
         // Adding command queue
         self.main.add_line(
             assign(
@@ -244,6 +245,7 @@ impl SDAccelProgram {
             let buff = self.map_var_buff.get(&param.name).unwrap().clone();
             for line in
                 gen_set_arg(
+                    buff.sym,
                     &param,
                     &mut index,
                     self.kernel.clone(),
@@ -264,6 +266,7 @@ impl SDAccelProgram {
             };
             for line in
                 gen_set_arg(
+                    (*name).clone(),
                     &p,
                     &mut index,
                     self.kernel.clone(),
@@ -297,7 +300,7 @@ impl SDAccelProgram {
                     "local".to_string(),
                     "0".to_string(),
                     "NULL".to_string(),
-                    kernel_event.gen_name(),
+                    kernel_event.gen_ref(),
                 ]
             }.emit())
         );
@@ -306,19 +309,15 @@ impl SDAccelProgram {
                 ty: SDAccelFuncType::SetCallback,
                 args: vec![
                     kernel_event.gen_name(),
-                    "kernel".to_string()
+                    "\"kernel\"".to_string()
                 ]
-            }.emit()
+            }.emit_line()
         );
         self.events.push(kernel_event);
     }
 
     pub fn enqueue_buffer_read(&mut self, build_buffer: &Symbol,
                                ty: &Type, size_sym: &Symbol) {
-        let mut events = Vec::new();
-        for i in self.ret_ty.clone() {
-            events.push(self.new_cl_var(SDAccelType::CLEvent));
-        }
         let num = self.ret_ty.clone().len();
         let mut events_cl = self.new_cl_var(
             SDAccelType::Vector(Box::new((SDAccelType::CLEvent)), num));
@@ -326,7 +325,6 @@ impl SDAccelProgram {
 
         match *ty {
             Type::Vector(_) =>  {
-                self.main.add_line(events[0].gen_declare());
                 self.main.add_line(
                     OCL_CHECK(
                     SDAccelFuncBuilder {

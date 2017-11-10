@@ -10,7 +10,7 @@ pub const SDACCEL_CL_WORLD_SYM_KEY: &'static str = "my_world";
 pub const SDACCEL_CL_COMMMANDQ_SYM_KEY: &'static str = "my_commandq";
 pub const SDACCEL_CL_EVENT_SYM_KEY: &'static str = "my_event";
 pub const SDACCEL_CL_VECTOR_SYM_KEY: &'static str = "myvector";
-#[derive(Clone, PartialEq, Hash, Eq)]
+#[derive(Clone, PartialEq, Hash, Eq, Debug)]
 pub enum SDAccelType {
     CLInt,
     CLProgram,
@@ -37,6 +37,7 @@ impl fmt::Display for SDAccelType{
     }
 }
 
+#[derive(Debug)]
 pub enum SDAccelFuncType {
     CLCreateBuffer,
     XCLImportBinary,
@@ -64,7 +65,7 @@ impl fmt::Display for SDAccelFuncType{
             SDAccelFuncType::XCLImportBinary => write!(f, "xcl_import_binary"),
             SDAccelFuncType::XCLGetKernel => write!(f, "xcl_get_kernel"),
             SDAccelFuncType::XCLSetKernelArg => write!(f, "xcl_set_kernel_arg"),
-            SDAccelFuncType::CLCreateCommandQueue => write!(f, "XCLSetKernelArg"),
+            SDAccelFuncType::CLCreateCommandQueue => write!(f, "clCreateCommandQueue"),
             SDAccelFuncType::Check => write!(f, "check"),
             SDAccelFuncType::CLEnqueueNDRangeKernel => write!(f, "clEnqueueNDRangeKernel"),
             SDAccelFuncType::SetCallback => write!(f, "set_callback"),
@@ -124,7 +125,7 @@ pub fn sym_key_from_sdacceltype(ty: SDAccelType) -> String {
     }
 }
 
-#[derive(Clone, PartialEq, Hash, Eq)]
+#[derive(Clone, PartialEq, Hash, Eq, Debug)]
 pub struct SDAccelVar{
     pub sym: Symbol,
     pub ty: SDAccelType,
@@ -168,7 +169,8 @@ impl SDAccelVar{
     }
     pub fn gen_declare(& self) -> String {
         match self.ty.clone() {
-            SDAccelType::Vector(_, num) => format!("{}[{}];", &self.gen_var(), num),
+            // Need to update this. not always "()"
+            SDAccelType::Vector(_, num) => format!("{}({});", &self.gen_var(), num),
             _ => format!("{};", self.gen_var())
         }
     }

@@ -16,8 +16,8 @@ pub const SDACCEL_BUFFER_BUILD_PREFIX: &'static str = "build_buff_";
 pub const SDACCEL_RESULT_NAME: &'static str = "result";
 
 
-pub const SDACCEL_MAIN_PROGRAM: &'static str = "main_program";
-pub const SDACCEL_MAIN_KERNEL: &'static str = "main_kernel";
+pub const SDACCEL_MAIN_PROGRAM: &'static str = "\"main_program\"";
+pub const SDACCEL_MAIN_KERNEL: &'static str = "\"func_0\"";
 
 pub static HOST_CODE: &'static str = include_str!("resources-sdaccel/host.ll");
 
@@ -231,7 +231,7 @@ pub fn get_sdaccel_type_from_kind(scalar_kind: ScalarKind) -> SDAccelType {
 }
 
 
-pub fn gen_set_arg(origin_param: &TypedParameter, index: &mut i32, mut kernel: SDAccelVar,
+pub fn gen_set_arg(buffer_sym: Symbol, origin_param: &TypedParameter, index: &mut i32, mut kernel: SDAccelVar,
                    buffer: bool) -> WeldResult<Vec<String>> {
     let mut vars = Vec::new();
     let mut result = Vec::new();
@@ -253,13 +253,16 @@ pub fn gen_set_arg(origin_param: &TypedParameter, index: &mut i32, mut kernel: S
                 },
                 ty : SDAccelType::CLInt
             };
+            //let actual_name = match buffer {
+                //true => buffer_sym.name.clone(),
+                //false => buffer_sym.clone()
+
+            //};
             let mem = SDAccelVar {
-                sym : Symbol {
-                    name : origin_name.clone(),
-                    id : 0
-                },
+                sym : buffer_sym,
                 ty : SDAccelType::CLMem
             };
+            println!("mem: {:?}", mem);
             //// Actual vector
             if !buffer {
                 vars.push(size);
@@ -277,7 +280,7 @@ pub fn gen_set_arg(origin_param: &TypedParameter, index: &mut i32, mut kernel: S
             gen_sizeof(var.gen_typename()),
             var.gen_ref(),
             ]
-        }.emit());
+        }.emit_line());
         *index = *index + 1;
 
     }
