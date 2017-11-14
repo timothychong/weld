@@ -5,7 +5,7 @@ LIBS=-lweld
 .PHONY: all clean
 
 all:
-	${CC} ${LDFLAGS} ${LIBS} vector_add_fpga.cpp -o run
+	${CC} ${LDFLAGS} ${LIBS} vector_add.cpp -o run
 
 clean:
 	rm -rf run
