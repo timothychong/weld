@@ -261,6 +261,7 @@ pub unsafe extern "C" fn weld_value_module(obj: *mut WeldValue) -> *mut WeldModu
 /// Weld values which are owned by the runtime also free the data they contain.
 /// Weld values which are not owned by the runtime only free the structure used
 /// to wrap the data; the actual data itself is owned by the caller.
+// TODO: Dennis, this causes a segmentation fault when called on output of FPGA backend
 pub unsafe extern "C" fn weld_value_free(obj: *mut WeldValue) {
     if obj.is_null() {
         return;
