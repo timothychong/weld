@@ -65,7 +65,8 @@ extern "C" {
 
 /// A clean alias for a compiled LLVM module.
 // TODO: Dennis, switched out llvm backend for sdaccel
-pub type WeldModule = sdaccel::CompiledModule; //llvm::CompiledModule;
+pub type WeldModule = llvm::CompiledModule;
+//pub type WeldModule = sdaccel::CompiledModule;
 
 /// An error passed as an opaque pointer using the runtime API.
 pub struct WeldError {
@@ -328,8 +329,8 @@ pub unsafe extern "C" fn weld_module_compile(code: *const c_char,
 
     info!("Started compiling program");
     // TODO: Dennis, switched out llvm backend for sdaccel
-    // let module = llvm::compile_program(&parsed.unwrap(), &conf, &mut stats);
-    let module = sdaccel::compile_program(&parsed.unwrap(), &conf, &mut stats);
+    let module = llvm::compile_program(&parsed.unwrap(), &conf, &mut stats);
+    //let module = sdaccel::compile_program(&parsed.unwrap(), &conf, &mut stats);
     info!("Done compiling program");
 
     if let Err(ref e) = module {
