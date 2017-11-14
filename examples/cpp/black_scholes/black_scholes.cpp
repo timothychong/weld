@@ -4,6 +4,7 @@
 #include <sys/time.h>
 
 #include <string.h>
+#include <inttypes.h>
 
 // Include the Weld API.
 #include "../../../c/weld.h"
@@ -114,9 +115,12 @@ struct timeval run_and_time_function(weld_module_t m, uint64_t length, weld_erro
 
 int main() {
     // Length of vector inputs
-    const uint64_t length = 256;
+    const uint64_t length = 1 << 22;
     // Number of timing iterations (averaged)
-    const int num_iter = 10;
+    const int num_iter = 25;
+
+    printf("Testing with length %"PRId64" and %d iterations...\n", 
+        length, num_iter);
 
     srand(1);
 
