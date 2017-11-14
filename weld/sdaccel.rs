@@ -43,6 +43,7 @@ pub struct SDAccelProgram {
     command_queue: SDAccelVar,
     world: SDAccelVar,
     kernel: SDAccelVar,
+    program: SDAccelVar,
 
 }
 
@@ -71,7 +72,7 @@ impl SDAccelProgram {
         let world = gen_new_cl_var( &mut generator, SDAccelType::XCLWorld);
         let kernel = gen_new_cl_var( &mut generator, SDAccelType:: CLKernel);
         let commandq = gen_new_cl_var( &mut generator, SDAccelType:: CLCommandQueue);
-
+        let program = gen_new_cl_var( &mut generator, SDAccelType::CLProgram);
         let mut prog = SDAccelProgram {
             ret_ty: Vec::new(),
             ret_ty_cl: Vec::new(),
@@ -83,6 +84,7 @@ impl SDAccelProgram {
             command_queue: commandq,
             events: Vec::new(),
             world: world,
+            program: program,
             kernel: kernel,
             map_var_buff: HashMap::new(),
         };
@@ -129,10 +131,9 @@ impl SDAccelProgram {
     pub fn init_world(&mut self) -> WeldResult<()> {
         self.main.add_line(gen_comment("Initializing World"));
         self.main.add_line(self.world.gen_declare_assign_str("xcl_world_single()"));
-        let mut program = self.new_cl_var(SDAccelType::CLProgram);
         self.main.add_line(
             assign(
-                program.gen_var(),
+                self.program.gen_var(),
                 SDAccelFuncBuilder {
                     ty: SDAccelFuncType::XCLImportBinary,
                     args: vec![
@@ -151,7 +152,7 @@ impl SDAccelProgram {
                 SDAccelFuncBuilder {
                     ty: SDAccelFuncType::XCLGetKernel,
                     args: vec![
-                        program.gen_name(),
+                        self.program.gen_name(),
                         SDACCEL_MAIN_KERNEL.to_string(),
                     ]
                 }.emit()
@@ -236,23 +237,29 @@ impl SDAccelProgram {
                                                  i,
                                                  &mut self.world)
             );
+            self.map_var_buff.insert(name.clone(), mem_var.clone());
         }
     }
 
     pub fn set_args(&mut self, prog: &SDAccelKernel) {
-        let mut index:i32 = 0;
+        self.main.add_line("int args = 0;".to_string());
+        // Pring out variables first then sizes
+        let mut sizes = Vec::new();
         for param in &self.top_params {
             let buff = self.map_var_buff.get(&param.name).unwrap().clone();
-            for line in
-                gen_set_arg(
+            let (mem, size) = gen_set_arg(
                     buff.sym,
                     &param,
-                    &mut index,
                     self.kernel.clone(),
                     false
-                                  ).unwrap() {
-                self.main.add_line(line);
+                    ).unwrap();
+            self.main.add_line(mem);
+            if let Some(s) = size {
+                sizes.push(s);
             }
+        }
+        for s in sizes {
+            self.main.add_line(s);
         }
 
         // Buffers
@@ -264,15 +271,15 @@ impl SDAccelProgram {
                 ty: (*ty).clone(),
                 name: (*name).clone(),
             };
-            for line in
-                gen_set_arg(
+            let (mem, size) = gen_set_arg(
                     (*name).clone(),
                     &p,
-                    &mut index,
                     self.kernel.clone(),
                     true
-                                  ).unwrap() {
-                self.main.add_line(line);
+                    ).unwrap();
+            self.main.add_line(mem);
+            if let Some(s) = size {
+                self.main.add_line(s);
             }
         }
 
@@ -322,6 +329,7 @@ impl SDAccelProgram {
         let mut events_cl = self.new_cl_var(
             SDAccelType::Vector(Box::new((SDAccelType::CLEvent)), num));
         self.main.add_line(events_cl.gen_declare());
+        let buff = self.map_var_buff.get(&build_buffer).unwrap().clone();
 
         match *ty {
             Type::Vector(_) =>  {
@@ -331,7 +339,7 @@ impl SDAccelProgram {
                         ty: SDAccelFuncType::CLEnqueueReadBuffer,
                         args: vec![
                             self.command_queue.gen_name(),
-                            build_buffer.clone().name,
+                            buff.clone().sym.name,
                             "CL_TRUE".to_string(),
                             "0".to_string(),
                             gen_name_size_in_byte(
@@ -366,6 +374,7 @@ impl SDAccelProgram {
         }
         string.push(get_release(&self.command_queue).unwrap());
         string.push(get_release(&self.kernel).unwrap());
+        string.push(get_release(&self.program).unwrap());
         string.push(get_release(&self.world).unwrap());
 
         self.main.add_line(string.join("\n"));
@@ -433,7 +442,7 @@ pub fn ast_to_sdaccel(expr: &TypedExpr) -> WeldResult<String> {
         let ty = kernel_prog.buffs.get(&sym).unwrap().clone();
         let sym_size = kernel_prog.find_var_target(&sym);
 
-        println!("{}: ty: {:?} {:?}", sym, ty, sym_size);
+        //println!("{}: ty: {:?} {:?}", sym, ty, sym_size);
 
         //for k in &kernel_prog.buffs {
             //let s = kernel_prog.find_var_target(&k.name);
@@ -465,7 +474,7 @@ pub fn ast_to_sdaccel(expr: &TypedExpr) -> WeldResult<String> {
         let _enqbuffread_res = prog.enqueue_buffer_read(&sym, &ty, &sym_size);
         prog.main.add_line("");
         let _release_res = prog.release();
-        prog.main.add_line("}");
+        prog.main.add_line("return 0; \n}");
 
 
         kernel_prog.update_all_func_size_param();
@@ -478,7 +487,7 @@ pub fn ast_to_sdaccel(expr: &TypedExpr) -> WeldResult<String> {
 
         let mut file = File::create("host.cpp")?;
         let mut kernel_file = File::create("device.cl")?;
-        println!("{}", final_host.result());
+        //println!("{}", final_host.result());
         file.write_all(final_host.result().as_bytes())?;
         kernel_file.write_all(format!("{}", kernel_prog).as_bytes())?;
 

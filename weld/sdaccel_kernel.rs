@@ -150,7 +150,9 @@ pub enum Statement {
     Func {
         name: String,
         args: HashMap<Symbol, Type>,
+        args_size: HashMap<Symbol, Type>,
         buffs: HashMap<Symbol, Type>,
+        buffs_size: HashMap<Symbol, Type>,
     },
 
     For {
@@ -166,6 +168,7 @@ pub enum Statement {
         right: Symbol,
     },
 
+
     BinOpLiteralRight {
         op: BinOpKind,
         left: Symbol,
@@ -177,7 +180,13 @@ pub enum Statement {
         right: Box<Statement>
     },
 
-    InstantiateAssignReference {
+    //InstantiateAssignReference {
+        //left: Symbol,
+        //ty: Type,
+        //right: Symbol
+    //},
+    //
+    GlobalInstantiateAssign{
         left: Symbol,
         ty: Type,
         right: Symbol
@@ -248,6 +257,7 @@ impl SDAccelKernel {
         let func = SDAccelFunction {
             id: self.funcs.len(),
             params: HashMap::new(),
+            params_size: HashMap::new(),
             blocks: vec![],
             locals: HashMap::new(),
             attr: vec![],
@@ -342,6 +352,7 @@ pub struct SDAccelFunction {
     pub attr: Vec<Attribute>,
     pub buffs: HashMap<Symbol, Type>,
     pub buffs_size: HashMap<Symbol, Type>,
+    pub params_size: HashMap<Symbol, Type>,
 
 }
 
@@ -372,25 +383,28 @@ impl SDAccelFunction {
 
     pub fn update_vec_with_size(&mut self) {
         let extra = extra_vec_with_size(&mut self.params);
-        self.params.extend(extra);
+        self.params_size.extend(extra);
 
         let extra = extra_vec_with_size(&mut self.buffs);
         self.buffs_size.extend(extra);
 
         for block in &mut self.blocks {
             for mut s in &mut block.statements{
-                if let Statement::Func {ref name, ref args,
-                ref buffs} = s.clone() {
-                    let extra = extra_vec_with_size(args);
-                    let mut newargs = args.clone();
-                    newargs.extend(extra);
-                    let extra = extra_vec_with_size(buffs);
-                    let mut newargsbuff = buffs.clone();
-                    newargsbuff.extend(extra);
+                if let Statement::Func {
+                    ref name,
+                    ref args,
+                    ref args_size,
+                    ref buffs,
+                    ref buffs_size
+                } = s.clone() {
+                    let args_size = extra_vec_with_size(args);
+                    let buffs_size = extra_vec_with_size(buffs);
                     *s = Statement::Func {
-                        args: newargs,
-                        buffs: newargsbuff,
+                        args: args.clone(),
+                        buffs: buffs.clone(),
                         name: name.clone(),
+                        args_size: args_size,
+                        buffs_size: buffs_size,
                     };
                 }
             }
@@ -564,17 +578,29 @@ impl fmt::Display for Statement {
             Func {
                 ref name,
                 ref args,
+                ref args_size,
                 ref buffs,
+                ref buffs_size,
             } => {
                 let sorted: BTreeMap<&Symbol, &Type> = args.iter().collect();
                 let sorted_buffs: BTreeMap<&Symbol, &Type> = buffs.iter().collect();
+                let sorted_buffs_size: BTreeMap<&Symbol, &Type> = buffs_size.iter().collect();
+                let sorted_args_size: BTreeMap<&Symbol, &Type> = args_size.iter().collect();
                 write!(f, "{}{}",
                            name,
                            join("(", ", ", "", sorted.iter().map(|e| format!("{}", e.0))))?;
+                if sorted_args_size.len() > 0 {
+                    write!(f, ", ")?;
+                }
+                write!(f, "{}", join("", ", ", "", sorted_args_size.iter().map(|e| format!("&{}", e.0))))?;
                 if sorted_buffs.len() > 0 {
                     write!(f, ", ")?;
                 }
                 write!(f, "{}", join("", ", ", "", sorted_buffs.iter().map(|e| format!("{}", e.0))))?;
+                if sorted_buffs_size.len() > 0 {
+                    write!(f, ", ")?;
+                }
+                write!(f, "{}", join("", ", ", "", sorted_buffs_size.iter().map(|e| format!("&{}", e.0))))?;
                 write!(f, ")")
 
             }
@@ -585,7 +611,7 @@ impl fmt::Display for Statement {
                 ref end,
                 ref inner,
             } => {
-                write!(f, "for({}; {}; {}){{\n{}\n  }}",
+                write!(f, "__attribute__((xcl_pipeline_loop))\nfor({}; {}; {}){{\n{}\n  }}",
                     join("", ", ", "", init.iter().map(|e| format!("{}", e))),
                     join("", ", ", "", cond.iter().map(|e| format!("{}", e))),
                     join("", ", ", "", end.iter().map(|e| format!("{}", e))),
@@ -628,13 +654,13 @@ impl fmt::Display for Statement {
                        *right)
             }
 
-            InstantiateAssignReference {
-                ref left,
-                ref ty,
-                ref right
-            } => {
-                write!(f, "{}& {} = {}", print_type(ty), left, right)
-            }
+            //InstantiateAssignReference {
+                //ref left,
+                //ref ty,
+                //ref right
+            //} => {
+                //write!(f, "{}& {} = {}", print_type(ty), left, right)
+            //}
 
             InstantiateAssign {
                 ref left,
@@ -642,6 +668,14 @@ impl fmt::Display for Statement {
                 ref right
             } => {
                 write!(f, "{} {} = {}", print_type(ty), left, right)
+            }
+
+            GlobalInstantiateAssign {
+                ref left,
+                ref ty,
+                ref right
+            } => {
+                write!(f, "__global {} {} = {}", print_type(ty), left, right)
             }
 
             InstantiateAssignIndexRight {
@@ -681,6 +715,8 @@ impl fmt::Display for SDAccelFunction {
         if self.id == 0 {
             write!(f, "__kernel ")?;
         }
+
+       let pointer = if self.id == 0 {""} else {"*"};
        for attr in &self.attr {
             write!(f, "__attribute__ (({}))\n", attr)?;
         }
@@ -689,7 +725,16 @@ impl fmt::Display for SDAccelFunction {
         let params_sorted: BTreeMap<&Symbol, &Type> = self.params.iter().collect();
        write!(f, "{}", join("(", ", ", "",
                params_sorted.iter().map(
-                   |e| format!("{} {}", gen_scalar_type(e.1).unwrap(), e.0)
+                   |e| format!("__global {} {}", gen_scalar_type(e.1).unwrap(), e.0)
+                   )))?;
+
+        let paramsize_sorted: BTreeMap<&Symbol, &Type> = self.params_size.iter().collect();
+       if paramsize_sorted.len() > 0 {
+           write!(f, ", ")?;
+       }
+       write!(f, "{}", join("", ", ", "",
+               paramsize_sorted.iter().map(
+                   |e| format!("{} {} {}", gen_scalar_type(e.1).unwrap(), pointer, e.0)
                    )))?;
 
        let buffs_sorted: BTreeMap<&Symbol, &Type> = self.buffs.iter().collect();
@@ -698,7 +743,7 @@ impl fmt::Display for SDAccelFunction {
        }
        write!(f, "{}", join("", ", ", "",
                buffs_sorted.iter().map(
-                   |e| format!("{} {}", gen_scalar_type(e.1).unwrap(), e.0)
+                   |e| format!("__global {} {}", gen_scalar_type(e.1).unwrap(), e.0)
                    )))?;
 
        if self.id > 0 {
@@ -708,7 +753,7 @@ impl fmt::Display for SDAccelFunction {
            }
            write!(f, "{}", join("", ", ", "",
                    buffsize_sorted.iter().map(
-                       |e| format!("{} & {}", gen_scalar_type(e.1).unwrap(), e.0)
+                       |e| format!("{} {} {}", gen_scalar_type(e.1).unwrap(), pointer, e.0)
                        )))?;
        }
 
@@ -738,8 +783,13 @@ impl fmt::Display for SDAccelFunction {
 impl fmt::Display for SDAccelKernel {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         for func in &self.funcs {
-            write!(f, "{}\n\n", func)?;
+            if func.id != 0  {
+                write!(f, "{}\n\n", func)?;
+            }
         }
+        write!(f, "{}\n\n", self.funcs[0])?;
+
+
         Ok(())
     }
 }
@@ -911,10 +961,23 @@ pub fn gen_expr(expr: &TypedExpr,
         ExprKind::NewBuilder(ref arg) => {
             match *arg {
                 Some(ref e) => {
-                    let (_ , nbuilder) = prog.add_buff(&e.ty, cur_func)?;
 
-                    //For now always create a new buffer
-                    Ok(Some(nbuilder))
+                    if let ExprKind::Length{ref data} = e.kind {
+                        if let Type::Vector(ref ty) = data.ty{
+                            let (_ , nbuilder) = prog.add_buff(&(*ty), cur_func)?;
+                            //println!("buff: {:?} e: {:?}", nbuilder, e);
+
+                            //For now always create a new buffer
+                            Ok(Some(nbuilder))
+
+                        } else {
+                            return weld_err! ("Length can only be of a vector");
+                        }
+
+                    } else {
+                        return weld_err! ("Only Length supported for\
+                                          New builder inner type");
+                    }
                 }
                 None => {
                     if let Type::Builder(ref bk, _) = expr.ty {
@@ -984,7 +1047,7 @@ pub fn gen_expr(expr: &TypedExpr,
                         let build_ty = prog.funcs[body_func].buffs.get(&builder_sym).unwrap().clone();
 
                         let lambda_builder = params[0].clone();
-                        let lambda_counter = gen_sym_size_sym(&builder_sym).clone();
+                        let lambda_counter = deref_sym(&gen_sym_size_sym(&builder_sym).clone());
                         let lambda_var = params[2].clone();
 
                         let mut var_syms:Vec<Symbol> = Vec::new();
@@ -998,32 +1061,34 @@ pub fn gen_expr(expr: &TypedExpr,
 
 
                                     //Get the symbol for the data
-                                    let data:Symbol;
-                                    match before_data {
-                                        None => {
-                                            //TODO
-                                            println!("ITER: {}", print_expr(&iter.data));
-                                            data = Symbol {
-                                                name:format!("FOO"),
-                                                id:0,
-                                            };
-                                        }
-                                        Some(d) => {
+                                    //let data:Symbol;
+                                    //match before_data {
+                                        //None => {
+                                            ////TODO
+                                            //println!("ITER: {}", print_expr(&iter.data));
+                                            //data = Symbol {
+                                                //name:format!("FOO"),
+                                                //id:0,
+                                            //};
+                                        //}
+                                        //Some(d) => {
 
-                                            data = d;
-                                        }
-                                    }
+                                            //data = d;
+                                        //}
+                                    //}
+                                    let data:Symbol = before_data.unwrap();
 
                                     // Get the symbol and then add it to the parameter
-                                    let ty = match prog.funcs[body_func].locals.get(&data){
-                                        // If you find it in local var.
-                                        // Do you still need to add it to params?
-                                        Some(d) => d.clone(),
-                                        // Look for it in global
-                                        None => {
-                                            prog.funcs[0].find_sym_type(&data)?
-                                        }
-                                    };
+                                    //let ty = match prog.funcs[body_func].locals.get(&data){
+                                        //// If you find it in local var.
+                                        //// Do you still need to add it to params?
+                                        //Some(d) => d.clone(),
+                                        //// Look for it in global
+                                        //None => {
+                                            //prog.funcs[0].find_sym_type(&data)?
+                                        //}
+                                    //};
+                                    let ty = prog.funcs[0].find_sym_type(&data)?;
                                     var_syms.push(data.clone());
                                     prog.funcs[body_func].params.insert(data.clone(), ty.clone());
 
@@ -1034,6 +1099,8 @@ pub fn gen_expr(expr: &TypedExpr,
 
                                     //Create counter for iterator
                                     let counter_sym = prog.add_local(&SDACCEL_COUNTER_TYPE, body_func);
+                                    //let counter_sym = &counter_sym_before_deref;
+                                    //let counter_sym = deref_sym(&gen_sym_size_sym(&builder_sym));
 
                                     //Right now only assume loop through entire array
                                     init.push(
@@ -1045,7 +1112,7 @@ pub fn gen_expr(expr: &TypedExpr,
                                     cond.push(
                                         BinOpNoAssign {
                                             left: counter_sym.clone(),
-                                            right: gen_sym_size_sym(&data),
+                                            right: deref_sym(&gen_sym_size_sym(&data)),
                                             op: BinOpKind::LessThan,
                                         }
                                     );
@@ -1081,7 +1148,7 @@ pub fn gen_expr(expr: &TypedExpr,
                         //Initialize builder reference
                         prog.funcs[body_func].blocks[body_block].add_statement(
                             // Setting builder reference
-                            InstantiateAssignReference {
+                            GlobalInstantiateAssign {
                                 left: lambda_builder.name.clone(),
                                 ty: build_ty.clone(),
                                 right: builder_sym.clone(),
@@ -1171,6 +1238,8 @@ pub fn gen_expr(expr: &TypedExpr,
                                 name: name,
                                 args: args.clone(),
                                 buffs: buffs.clone(),
+                                args_size: HashMap::new(),
+                                buffs_size: HashMap::new(),
                             });
 
 

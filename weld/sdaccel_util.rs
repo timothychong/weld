@@ -231,8 +231,8 @@ pub fn get_sdaccel_type_from_kind(scalar_kind: ScalarKind) -> SDAccelType {
 }
 
 
-pub fn gen_set_arg(buffer_sym: Symbol, origin_param: &TypedParameter, index: &mut i32, mut kernel: SDAccelVar,
-                   buffer: bool) -> WeldResult<Vec<String>> {
+pub fn gen_set_arg(buffer_sym: Symbol, origin_param: &TypedParameter, mut kernel: SDAccelVar,
+                   buffer: bool) -> WeldResult<(String, Option<String>)> {
     let mut vars = Vec::new();
     let mut result = Vec::new();
     match  origin_param.ty{
@@ -262,12 +262,11 @@ pub fn gen_set_arg(buffer_sym: Symbol, origin_param: &TypedParameter, index: &mu
                 sym : buffer_sym,
                 ty : SDAccelType::CLMem
             };
-            println!("mem: {:?}", mem);
             //// Actual vector
+            vars.push(mem);
             if !buffer {
                 vars.push(size);
             }
-                vars.push(mem);
         },
         _ => return weld_err!("Not supported vars type.")
     }
@@ -276,16 +275,20 @@ pub fn gen_set_arg(buffer_sym: Symbol, origin_param: &TypedParameter, index: &mu
             ty: SDAccelFuncType::XCLSetKernelArg,
             args: vec![
             kernel.gen_name(),
-            index.to_string(),
+            "args++".to_string(),
             gen_sizeof(var.gen_typename()),
             var.gen_ref(),
             ]
         }.emit_line());
-        *index = *index + 1;
 
     }
-    Ok(result)
-
+    if result.len() == 2 {
+        return Ok((result[0].clone(), Some(result[1].clone())))
+    } else if result.len() == 1{
+        return Ok((result[0].clone(), None))
+    } else {
+        weld_err!("Result vector has more than 2 items in set args")
+    }
 }
 
 //pub fn gen_set_arg_typed(param: &TypedParameter, index: &mut i32, mut kernel: SDAccelVar)
@@ -381,4 +384,11 @@ pub fn get_release(e: &SDAccelVar) -> WeldResult<String> {
         _ => weld_err!("Get release event wrong type")
     }
 
+}
+
+pub fn deref_sym(s:&Symbol) -> Symbol {
+    Symbol {
+        name: format!("*{}", s),
+        id:s.id
+    }
 }
