@@ -46,6 +46,7 @@ pub mod partial_types;
 pub mod pretty_print;
 pub mod program;
 pub mod runtime;
+pub mod sdaccel;
 pub mod sir;
 pub mod tokenizer;
 pub mod transforms;
@@ -56,13 +57,15 @@ pub mod exprs;
 pub mod expr_hash;
 
 pub mod easy_ll;
+pub mod easy_sda;
 
 extern "C" {
     pub fn free(ptr: *mut c_void);
 }
 
 /// A clean alias for a compiled LLVM module.
-pub type WeldModule = llvm::CompiledModule;
+// TODO: Dennis, switched out llvm backend for sdaccel
+pub type WeldModule = sdaccel::CompiledModule; //llvm::CompiledModule;
 
 /// An error passed as an opaque pointer using the runtime API.
 pub struct WeldError {
@@ -323,7 +326,9 @@ pub unsafe extern "C" fn weld_module_compile(code: *const c_char,
     }
 
     info!("Started compiling program");
-    let module = llvm::compile_program(&parsed.unwrap(), &conf, &mut stats);
+    // TODO: Dennis, switched out llvm backend for sdaccel
+    // let module = llvm::compile_program(&parsed.unwrap(), &conf, &mut stats);
+    let module = sdaccel::compile_program(&parsed.unwrap(), &conf, &mut stats);
     info!("Done compiling program");
 
     if let Err(ref e) = module {

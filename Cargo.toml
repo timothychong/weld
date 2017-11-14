@@ -22,6 +22,7 @@ time = "*"
 llvm-sys = "38.0.1"
 fnv = "1.0.5"
 clap = "*"
+libloading = "0.4.2"
 
 
 [lib]
