@@ -7,7 +7,7 @@ pub const SDACCEL_ARG_SEPARATOR: &'static str = ", ";
 pub const SDACCEL_ARG_POINTER: &'static str = "* ";
 pub const SDACCEL_SIZE_SUFFIX: &'static str = "_size";
 pub const SDACCEL_SIZE_IN_BYTES_SUFFIX: &'static str = "_size_in_byte";
-pub const SDACCEL_SIZE_KIND: ScalarKind = ScalarKind::U32;
+pub const SDACCEL_SIZE_KIND: ScalarKind = ScalarKind::I64;
 pub const SDACCEL_SIZE_TYPE: Type = Type::Scalar(SDACCEL_SIZE_KIND);
 pub const SDACCEL_COUNTER_TYPE: Type = Type::Scalar(ScalarKind::I64);
 pub const SDACCEL_BUFFER_MEM_SUFFIX: &'static str = "_mbuf";
@@ -22,14 +22,14 @@ pub const SDACCEL_MAIN_KERNEL: &'static str = "\"func_0\"";
 pub static HOST_CODE: &'static str = include_str!("resources-sdaccel/host.ll");
 
 
-pub fn gen_scalar_type_from_kind(scalar_kind: ScalarKind) -> String {
-     String::from(match scalar_kind {
+pub fn gen_scalar_type_from_kind(scalar_kind: &ScalarKind) -> String {
+     String::from(match *scalar_kind {
         ScalarKind::Bool => "bool",
         ScalarKind::I8 => "signed char",
         ScalarKind::U8 => "unsigned char",
-        ScalarKind::I32|ScalarKind::I16 => "signed int",
+        ScalarKind::I32|ScalarKind::I16 => "int",
         ScalarKind::U32|ScalarKind::U16 => "unsigned int",
-        ScalarKind::I64 => "signed long",
+        ScalarKind::I64 => "long",
         ScalarKind::U64 => "unsigned long",
         ScalarKind::F32 => "float",
         ScalarKind::F64 => "double",
@@ -38,11 +38,11 @@ pub fn gen_scalar_type_from_kind(scalar_kind: ScalarKind) -> String {
 
 pub fn gen_scalar_type(ty: &Type) -> WeldResult<String> {
     match *ty {
-        Type::Scalar(scalar_kind) => Ok(gen_scalar_type_from_kind(scalar_kind)),
+        Type::Scalar(scalar_kind) => Ok(gen_scalar_type_from_kind(&scalar_kind)),
         Type::Vector(ref s) => {
             match **s {
                 Type::Scalar(kind) =>{
-                    Ok(format!{"{} *", gen_scalar_type_from_kind(kind)})
+                    Ok(format!{"{} *", gen_scalar_type_from_kind(&kind)})
                 }
                 _ => weld_err!("Not supported gen_scalar type inside vector. {:?} ", ty)
             }
@@ -103,19 +103,19 @@ pub fn gen_line_buffer_mem(param: &TypedParameter, cl: &mut SDAccelVar,
     assign(mem_var.gen_var(), func.emit())
 }
 
-pub fn gen_line_alloc_output_buffer_mem(mem_var: &mut SDAccelVar,  index: usize, world: &mut SDAccelVar) -> String {
+//pub fn gen_line_alloc_output_buffer_mem(mem_var: &mut SDAccelVar,  index: usize, world: &mut SDAccelVar) -> String {
 
-    let mut func = SDAccelFuncBuilder {
-        ty: SDAccelFuncType::XCLMalloc,
-        args: vec![
-        world.gen_name(),
-        "CL_MEM_WRITE_ONLY".to_string(),
-        gen_name_size_in_byte(&gen_name_result(index)),
-        ]
-    };
-    assign(mem_var.gen_name(), func.emit())
+    //let mut func = SDAccelFuncBuilder {
+        //ty: SDAccelFuncType::XCLMalloc,
+        //args: vec![
+        //world.gen_name(),
+        //"CL_MEM_WRITE_ONLY".to_string(),
+        //gen_name_size_in_byte(&gen_name_result(index)),
+        //]
+    //};
+    //assign(mem_var.gen_name(), func.emit())
 
-}
+//}
 
 pub fn gen_line_alloc_output_buffer_mem_builder(mem_var: &mut SDAccelVar,  index: usize, world: &mut SDAccelVar) -> String {
 
@@ -173,7 +173,7 @@ pub fn gen_var(ty: Type, name: &String) -> WeldResult<String> {
     match ty {
         Type::Scalar(scalar_kind) => {
             let s = format!("{} {}",
-                    gen_scalar_type_from_kind(scalar_kind),
+                    gen_scalar_type_from_kind(&scalar_kind),
                     name);
             Ok(s)
         },
@@ -251,7 +251,7 @@ pub fn gen_set_arg(buffer_sym: Symbol, origin_param: &TypedParameter, mut kernel
                     name : gen_name_size(&origin_name),
                     id : 0
                 },
-                ty : SDAccelType::CLInt
+                ty : SDAccelType::CLLong
             };
             //let actual_name = match buffer {
                 //true => buffer_sym.name.clone(),
@@ -275,7 +275,7 @@ pub fn gen_set_arg(buffer_sym: Symbol, origin_param: &TypedParameter, mut kernel
             ty: SDAccelFuncType::XCLSetKernelArg,
             args: vec![
             kernel.gen_name(),
-            "args++".to_string(),
+            "nargs++".to_string(),
             gen_sizeof(var.gen_typename()),
             var.gen_ref(),
             ]

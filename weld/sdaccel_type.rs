@@ -3,6 +3,7 @@ use super::sdaccel_util::*;
 use std::fmt;
 
 pub const SDACCEL_CL_INT_SYM_KEY: &'static str = "my_int";
+pub const SDACCEL_CL_LONG_SYM_KEY: &'static str = "my_long";
 pub const SDACCEL_CL_PROGRAM_SYM_KEY: &'static str = "my_program";
 pub const SDACCEL_CL_KERNEL_SYM_KEY: &'static str = "my_kernel";
 pub const SDACCEL_CL_MEM_SYM_KEY: &'static str = "my_mem";
@@ -13,6 +14,7 @@ pub const SDACCEL_CL_VECTOR_SYM_KEY: &'static str = "myvector";
 #[derive(Clone, PartialEq, Hash, Eq, Debug)]
 pub enum SDAccelType {
     CLInt,
+    CLLong,
     CLProgram,
     CLKernel,
     CLEvent,
@@ -26,6 +28,7 @@ impl fmt::Display for SDAccelType{
     fn fmt(& self, f: &mut fmt::Formatter) -> fmt::Result {
         match self.clone() {
             SDAccelType::CLInt => write!(f, "cl_int"),
+            SDAccelType::CLLong => write!(f, "cl_long"),
             SDAccelType::CLProgram => write!(f, "cl_program"),
             SDAccelType::CLKernel => write!(f, "cl_kernel"),
             SDAccelType::CLMem => write!(f, "cl_mem"),
@@ -115,6 +118,7 @@ impl SDAccelFuncBuilder {
 pub fn sym_key_from_sdacceltype(ty: SDAccelType) -> String {
     match ty {
         SDAccelType::CLInt => SDACCEL_CL_INT_SYM_KEY.to_string(),
+        SDAccelType::CLLong => SDACCEL_CL_LONG_SYM_KEY.to_string(),
         SDAccelType::CLProgram => SDACCEL_CL_PROGRAM_SYM_KEY.to_string(),
         SDAccelType::CLKernel => SDACCEL_CL_KERNEL_SYM_KEY.to_string(),
         SDAccelType::CLMem => SDACCEL_CL_MEM_SYM_KEY.to_string(),
