@@ -2,7 +2,6 @@ use super::ast::*;
 use super::error::*;
 use super::passes::*;
 use super::pretty_print::*;
-use super::transforms;
 use super::type_inference;
 use super::macro_processor;
 use super::program::Program;
@@ -28,8 +27,7 @@ pub struct SDAccelProgram {
 
     // HOST
     pub sym_gen: SymbolGenerator,
-    pub ret_ty: Vec<Type>,
-    pub ret_ty_cl: Vec<SDAccelVar>,
+    pub ret_ty: Type,
     pub top_params: Vec<TypedParameter>,
     pub top_params_cl: Vec<SDAccelVar>,
     pub output_buf: Vec<SDAccelVar>,
@@ -56,7 +54,8 @@ pub fn gen_new_cl_var(generator: &mut SymbolGenerator, ty: SDAccelType) ->
     }
 }
 
-pub fn gen_new_cl_var_name(generator: &mut SymbolGenerator, ty: SDAccelType, name:&String) ->
+pub fn gen_new_cl_var_name(generator: &mut SymbolGenerator,
+                           ty: SDAccelType, name:&String) ->
     SDAccelVar {
     let sym = generator.new_symbol(&name);
     SDAccelVar{
@@ -67,15 +66,15 @@ pub fn gen_new_cl_var_name(generator: &mut SymbolGenerator, ty: SDAccelType, nam
 
 impl SDAccelProgram {
 
-    pub fn new(ret_ty: &Type, top_params: &Vec<TypedParameter>) -> WeldResult<SDAccelProgram> {
+    pub fn new(ret_ty: &Type, top_params: &Vec<TypedParameter>)
+               -> WeldResult<SDAccelProgram> {
         let mut generator = SymbolGenerator::new();
         let world = gen_new_cl_var( &mut generator, SDAccelType::XCLWorld);
         let kernel = gen_new_cl_var( &mut generator, SDAccelType:: CLKernel);
         let commandq = gen_new_cl_var( &mut generator, SDAccelType:: CLCommandQueue);
         let program = gen_new_cl_var( &mut generator, SDAccelType::CLProgram);
         let mut prog = SDAccelProgram {
-            ret_ty: Vec::new(),
-            ret_ty_cl: Vec::new(),
+            ret_ty: ret_ty.clone(),
             top_params: top_params.clone(),
             top_params_cl: Vec::new(),
             output_buf: Vec::new(),
@@ -88,12 +87,6 @@ impl SDAccelProgram {
             kernel: kernel,
             map_var_buff: HashMap::new(),
         };
-        match *ret_ty {
-            Type::Function(_, ref rt) => prog.ret_ty.push(*rt.clone()),
-            Type::Struct(ref v) => prog.ret_ty.extend_from_slice(&v),
-            _ => return weld_err!("Unsupported function return type")
-        };
-        /// add main
         Ok(prog)
     }
     pub fn new_cl_var(&mut self, ty:SDAccelType) -> SDAccelVar {
@@ -122,7 +115,9 @@ impl SDAccelProgram {
 
                         vector_structs.push_str(
                             &format!(
-                            "struct weld_vector_{}_t {{\n    {} *data;\n    int64_t length;\n}};",
+                            "struct weld_vector_{}_t {{\n    \
+                            {} *data;\n    \
+                            int64_t length;\n}};",
                                         kind, kind)
                         );
                     }
@@ -137,12 +132,16 @@ impl SDAccelProgram {
             for param in &self.top_params {
                 match param.ty {
                     Type::Scalar(ref k) => {
-                        self.main.add_line(format!("    {} {};", gen_scalar_type_from_kind(k), &param.name));
+                        self.main.add_line(format!("    {} {};",
+                                                   gen_scalar_type_from_kind(k),
+                                                   &param.name));
                     },
                     Type::Vector(ref v) => {
                         if let Type::Scalar(k) = **v {
-                            self.main.add_line(format!("    struct weld_vector_{}_t {};", gen_scalar_type_from_kind(&k),
-                                                        &param.name));
+                            self.main.add_line(
+                                format!("    struct weld_vector_{}_t {};",
+                                       gen_scalar_type_from_kind(&k),
+                                        &param.name));
                         }
                     },
                     _ => return weld_err!("Only scalar and vector param type is supported"),
@@ -150,35 +149,43 @@ impl SDAccelProgram {
                 }
             }
         self.main.add_line("};");
-        self.main.add_line("struct args_t *args = (struct args_t *)(((input_arg_t *)in)->data);");
+        self.main.add_line("struct args_t *args = (struct args_t *)\
+                           (((input_arg_t *)in)->data);");
 
 
         for param in &self.top_params {
             match param.ty {
                 Type::Scalar(ref k) => {
-                    self.main.add_line(format!("    {} {} = args->{};", gen_scalar_type_from_kind(k), &param.name,
-                                                                &param.name));
-                },
+                    self.main.add_line(format!("    {} {} = args->{};",
+                                               gen_scalar_type_from_kind(k),
+                                               &param.name,
+                                               &param.name));
+                }
+
                 Type::Vector(ref v) => {
                     if let Type::Scalar(k) = **v {
                         //For size
                         let size_sym = gen_sym_size_sym(&param.name);
                         self.main.add_line(format!("{} {} = args->{}.length;",
-                                            gen_scalar_type_from_kind(&SDACCEL_SIZE_KIND), &size_sym, &param.name));
+                                            gen_scalar_type_from_kind(&SDACCEL_SIZE_KIND),
+                                            &size_sym,
+                                            &param.name));
 
                         //For actual data
                         self.main.add_line(format!("{} * {} = args->{}.data;",
-                                            gen_scalar_type_from_kind(&k), &param.name, &param.name));
+                                            gen_scalar_type_from_kind(&k),
+                                            &param.name,
+                                            &param.name));
                     }
-                },
-                _ => return weld_err!("Only scalar and vector param type is supported"),
+                }
+
+                _ =>  {
+                    return weld_err!("Only scalar and vector param type is supported")
+                }
 
             }
         }
 
-        for param in &self.ret_ty {
-
-        }
 
         // For outputs
 
@@ -217,7 +224,7 @@ impl SDAccelProgram {
             )
         );
 
-        let mut err = self.new_cl_var(SDAccelType::CLInt);
+        let err = self.new_cl_var(SDAccelType::CLInt);
         self.main.add_line(err.gen_declare());
         // Adding command queue
         self.main.add_line(
@@ -257,29 +264,13 @@ impl SDAccelProgram {
             }
 
         }
-        //for (i, x) in self.ret_ty.clone().iter().enumerate() {
-            //match *x {
-                //Type::Vector(_) =>  {
-                    //let mut mem_var = self.new_cl_var(SDAccelType::CLMem);
-                    //self.main.add_line(mem_var.gen_declare());
-                    //self.main.add_line(
-                        //gen_line_alloc_output_buffer_mem(&mut mem_var,
-                                                         //i,
-                                                         //&mut self.world)
-                    //);
-                    //self.output_buf.push(mem_var)
-                //},
-                //_ => {}
-            //}
-        //}
 
         // Output buffer
         Ok(())
     }
 
     pub fn set_kernel_buffer(&mut self, prog: & SDAccelKernel) {
-        let sorted: BTreeMap<&Symbol, &Type> = prog.buffs.iter().collect();
-        for (i, x) in prog.buffs.iter().enumerate() {
+        for x in &prog.buffs {
             let (name, ty) = x;
             let mut mem_var = self.new_cl_var_name(SDAccelType::CLMem, &name.name);
             let s = prog.find_var_target(&name);
@@ -292,14 +283,43 @@ impl SDAccelProgram {
             self.main.add_line(mem_var.gen_declare());
             self.main.add_line(
                 gen_line_alloc_output_buffer_mem_builder(&mut mem_var,
-                                                 i,
                                                  &mut self.world)
             );
             self.map_var_buff.insert(name.clone(), mem_var.clone());
         }
     }
 
-    pub fn set_args(&mut self, prog: &SDAccelKernel) {
+    pub fn allocate_result_buffer(&mut self, prog: &SDAccelKernel) -> WeldResult<()> {
+
+        match &self.ret_ty.clone() {
+            &Type::Function(_, ref rt ) => {
+                match **rt {
+                    Type::Vector(ref v) => {
+                        let name = prog.get_ret_sym();
+                        let alloc_name = gen_name_result_mem(0);
+                        let mut mem_var = self.new_cl_var_name(SDAccelType::CLMem, &alloc_name);
+                        self.main.add_line(
+                            gen_line_size_in_byte_var(
+                                SDACCEL_SIZE_TYPE.clone(),
+                                &alloc_name,
+                        ));
+                        self.main.add_line(mem_var.gen_declare());
+                        self.main.add_line(
+                            gen_line_alloc_output_buffer_mem_builder(&mut mem_var,
+                                                             &mut self.world)
+                        );
+                        self.map_var_buff.insert(name.clone(), mem_var.clone());
+                    }
+                    _ => return weld_err!("Only Return type vector supported")
+                }
+            }
+            _ => return weld_err!("Only Return type vector supported")
+        }
+        return Ok(())
+
+    }
+
+    pub fn set_args(&mut self, prog: &SDAccelKernel) -> WeldResult<()>{
         self.main.add_line("int nargs = 0;".to_string());
         // Pring out variables first then sizes
         let mut sizes = Vec::new();
@@ -322,7 +342,7 @@ impl SDAccelProgram {
 
         // Buffers
         let sorted: BTreeMap<&Symbol, &Type> = prog.buffs.iter().collect();
-        for (i, x) in sorted.iter().enumerate() {
+        for x in sorted {
             let (name, ty) = x;
 
             let p = TypedParameter {
@@ -341,6 +361,35 @@ impl SDAccelProgram {
             }
         }
 
+        // Output if we need more
+        match &self.ret_ty {
+            &Type::Function(_, ref rt ) => {
+                match **rt {
+                    Type::Vector(ref k) => {
+                        let name = Symbol {
+                            name: gen_name_result_mem(0),
+                            id: 0
+                        };
+                        // Create size output
+                        let p = TypedParameter {
+                            ty: SDACCEL_SIZE_TYPE.clone(),
+                            name: name.clone(),
+                        };
+                        let (mem, size) = gen_set_arg(
+                                name.clone(),
+                                &p,
+                                self.kernel.clone(),
+                                true
+                                ).unwrap();
+                        self.main.add_line(mem);
+                    }
+                    _ => return weld_err!("Only Return type vector supported")
+                }
+            }
+
+            _ => return weld_err!("Only Return type vector supported")
+        }
+        Ok(())
     }
 
     pub fn declare_work_size(&mut self) {
@@ -350,10 +399,10 @@ impl SDAccelProgram {
     }
 
     pub fn enqueue_command(&mut self) {
-        let mut kernel_event = self.new_cl_var(SDAccelType::CLEvent);
+        let kernel_event = self.new_cl_var(SDAccelType::CLEvent);
         self.main.add_line(kernel_event.gen_declare());
         self.main.add_line(
-            OCL_CHECK(
+            ocl_check(
             SDAccelFuncBuilder {
                 ty: SDAccelFuncType::CLEnqueueNDRangeKernel,
                 args: vec![
@@ -393,86 +442,174 @@ impl SDAccelProgram {
 
         // Add output struct
         self.main.add_line("struct results_t {");
-        let mut result_index = 0;
-        for r in &self.ret_ty {
-            match *r {
-                Type::Scalar(k) => {
-
-                }
-
-                Type::Vector(ref v) => {
-                    if let Type::Scalar(k) = **v {
-                        self.main.add_line(format!("    struct weld_vector_{}_t {};", gen_scalar_type_from_kind(&k), gen_name_result(result_index)));
-
-                        result_index += 2;
-                    } else {
-                        return weld_err!("not supported: Vector inner type must be scalar")
+        match &self.ret_ty {
+            &Type::Function(_, ref rt ) => {
+                match **rt {
+                    Type::Scalar(k) => {
+                        return weld_err!("not supported: return scalar type not supported")
                     }
+
+                    Type::Vector(ref v) => {
+                        if let Type::Scalar(k) = **v {
+                            self.main.add_line(format!("    struct weld_vector_{}_t {};",
+                                                       gen_scalar_type_from_kind(&k),
+                                                       SDACCEL_RESULT_VECTOR_NAME));
+                        } else {
+                            return weld_err!("not supported: Vector inner type must be scalar")
+                        }
+                    }
+                    _ => return weld_err!("Only Return type vector supported")
                 }
-                _ => return weld_err!("Only scalar and vector return param type is supported"),
             }
+            _ => return weld_err!("Only scalar and vector return param type is supported"),
         }
 
         self.main.add_line("};");
 
-        self.main.add_line("struct results_t *result = (struct results_t *)malloc(sizeof(struct results_t));");
-        self.main.add_line("output_result->data = (int64_t) result;");
+        self.main.add_line("struct results_t *result =\
+                (struct results_t *)malloc(sizeof(struct results_t));");
+        self.main.add_line("output_result->data = \
+                           (int64_t) result;");
 
-        let num = self.ret_ty.clone().len();
+
+        let num = match &self.ret_ty {
+            &Type::Function(_, ref rt ) => {
+                match **rt {
+                    Type::Scalar(_) => 1,
+                    Type::Vector(_) => 2,
+                    _ => return weld_err!("Only scalar and vector supported for return type")
+                }
+            }
+            _ => return weld_err!("Only function return type supported"),
+        }
+;
         let mut events_cl = self.new_cl_var(
             SDAccelType::Vector(Box::new((SDAccelType::CLEvent)), num));
         self.main.add_line(events_cl.gen_declare());
+
+        match &self.ret_ty {
+            &Type::Function(_, ref rt ) => {
+                match **rt {
+                    Type::Scalar(k) => {
+                        return weld_err!("not supported: return scalar type not supported")
+                    }
+
+                    Type::Vector(ref v) => {
+
+                        if let Type::Scalar(k) = **v {
+                                self.main.add_line(
+                                    ocl_check(
+                                    SDAccelFuncBuilder {
+                                        ty: SDAccelFuncType::CLEnqueueReadBuffer,
+                                        args: vec![
+                                            self.command_queue.gen_name(),
+                                            gen_name_result_mem(0),
+                                            "CL_TRUE".to_string(),
+                                            "0".to_string(),
+                                            gen_sizeof(
+                                                gen_scalar_type_from_kind(&SDACCEL_SIZE_KIND)
+                                            ),
+                                            format!("&(result->{}.length)",
+                                                    SDACCEL_RESULT_VECTOR_NAME),
+                                            "0".to_string(),
+                                            "NULL".to_string(),
+                                            events_cl.gen_ref_idx(0)
+                                        ]
+                                    }.emit())
+                                );
+                                self.main.add_line(gen_wait_event(0, &events_cl));
+                            self.main.add_line(
+                                &format!(
+                                "result->{}.data = ({} *) malloc(result->{}.length \
+                                    * sizeof({}));",
+                                SDACCEL_RESULT_VECTOR_NAME,
+                                gen_scalar_type_from_kind(&k),
+                                SDACCEL_RESULT_VECTOR_NAME,
+                                gen_scalar_type_from_kind(&k)
+                                )
+                            );
+                            self.main.add_line(gen_wait_event(1, &events_cl));
+                            self.main.add_line(
+                                ocl_check(
+                                SDAccelFuncBuilder {
+                                    ty: SDAccelFuncType::CLEnqueueReadBuffer,
+                                    args: vec![
+                                        self.command_queue.gen_name(),
+                                        build_buffer.clone().name,
+                                        "CL_TRUE".to_string(),
+                                        "0".to_string(),
+                                        format!("result->{}.length * sizeof( {} )",
+                                                SDACCEL_RESULT_VECTOR_NAME,
+                                                gen_scalar_type_from_kind(&k)
+                                                ),
+                                        format!("result->{}.data", SDACCEL_RESULT_VECTOR_NAME),
+                                        "0".to_string(),
+                                        "NULL".to_string(),
+                                        events_cl.gen_ref_idx(1)
+                                    ]
+                                }.emit())
+                            );
+                        }  else {
+                            return weld_err!("not supported: Vector inner type must be scalar");
+                        }
+
+
+                    }
+                    _ => return weld_err!("Only Return type vector supported")
+                }
+            }
+            _ => return weld_err!("Only scalar and vector return param type is supported"),
+        }
+
         let buff = self.map_var_buff.get(&build_buffer).unwrap().clone();
 
-        result_index = 0;
-        match *ty {
-            Type::Vector(ref v) =>  {
-                // Allocating result buffer
-                //
+        //match *ty {
+            //Type::Vector(ref v) =>  {
+                //// Allocating result buffer
+                ////
+                //if let Type::Scalar(k) = **v {
+                    //self.main.add_line(
+                        //&format!(
+                        //"result->{}.data = ({} *) malloc({});",
+                        //SDACCEL_RESULT_VECTOR_NAME,
+                        //gen_scalar_type_from_kind(&k),
+                        //gen_name_size_in_byte(&build_buffer.name)
+                         //)
+                    //);
+                //}  else {
+                    //return weld_err!("not supported: Vector inner type must be scalar");
+                //}
 
-                if let Type::Scalar(k) = **v {
-                    self.main.add_line(
-                        &format!(
-                        "result->{}.data = ({} *) malloc({});",
-                        gen_name_result(result_index),
-                        gen_scalar_type_from_kind(&k),
-                        gen_name_size_in_byte(&build_buffer.name)
-                         )
-                    );
-                }  else {
-                    return weld_err!("not supported: Vector inner type must be scalar");
-                }
-                self.main.add_line(
-                    OCL_CHECK(
-                    SDAccelFuncBuilder {
-                        ty: SDAccelFuncType::CLEnqueueReadBuffer,
-                        args: vec![
-                            self.command_queue.gen_name(),
-                            build_buffer.clone().name,
-                            "CL_TRUE".to_string(),
-                            "0".to_string(),
-                            gen_name_size_in_byte(
-                                &build_buffer.name),
-                            format!("result->{}.data", gen_name_result(result_index)),
-                            "0".to_string(),
-                            "NULL".to_string(),
-                            events_cl.gen_ref_idx(0)
-                        ]
-                    }.emit())
-                );
-                //TODO: update to double check result_index
-            }
-            // TODO
-            Type::Scalar(_) => {
-                return weld_err!("enqueuebuffer_read not implmeneted yet");
-            },
-            _ => {
-                return weld_err!("return type not exist");
-            }
-        }
+                //self.main.add_line(
+                    //ocl_check(
+                    //SDAccelFuncBuilder {
+                        //ty: SDAccelFuncType::CLEnqueueReadBuffer,
+                        //args: vec![
+                            //self.command_queue.gen_name(),
+                            //build_buffer.clone().name,
+                            //"CL_TRUE".to_string(),
+                            //"0".to_string(),
+                            //gen_name_size_in_byte(
+                                //&build_buffer.name),
+                            //format!("result->{}.data", SDACCEL_RESULT_VECTOR_NAME),
+                            //"0".to_string(),
+                            //"NULL".to_string(),
+                            //events_cl.gen_ref_idx(0)
+                        //]
+                    //}.emit())
+                //);
+            //}
+            //// TODO
+            //Type::Scalar(_) => {
+                //return weld_err!("enqueuebuffer_read not implmeneted yet");
+            //},
+            //_ => {
+                //return weld_err!("return type not exist");
+            //}
+        //}
         //Waiting for result transfer
-        self.main.add_line(gen_wait_event(num, &mut events_cl));
-        self.events.push(events_cl);
+        //self.main.add_line(gen_wait_event(num, &mut events_cl));
+        //self.events.push(events_cl);
         Ok(())
     }
 
@@ -492,7 +629,8 @@ impl SDAccelProgram {
     }
 }
 
-pub fn apply_opt_passes(expr: &mut TypedExpr, opt_passes: &Vec<Pass>, stats: &mut CompilationStats) -> WeldResult<()> {
+pub fn apply_opt_passes(expr: &mut TypedExpr, opt_passes: &Vec<Pass>,
+                        stats: &mut CompilationStats) -> WeldResult<()> {
     for pass in opt_passes {
         let start = PreciseTime::now();
         pass.transform(expr)?;
@@ -503,7 +641,8 @@ pub fn apply_opt_passes(expr: &mut TypedExpr, opt_passes: &Vec<Pass>, stats: &mu
     Ok(())
 }
 
-pub fn compile_program(program: &Program, conf: &ParsedConf, stats: &mut CompilationStats)
+pub fn compile_program(program: &Program, conf: &ParsedConf,
+                       stats: &mut CompilationStats)
         -> WeldResult<()> {
 
     let mut expr = macro_processor::process_program(program)?;
@@ -534,7 +673,7 @@ pub fn compile_program(program: &Program, conf: &ParsedConf, stats: &mut Compila
     println!("Generating OpenCL");
 
     let start = PreciseTime::now();
-    ast_to_sdaccel(&expr);
+    let _some_output = ast_to_sdaccel(&expr);
     let end = PreciseTime::now();
     stats.weld_times.push(("AST to SDACCEL".to_string(), start.to(end)));
     Ok(())
@@ -543,15 +682,17 @@ pub fn compile_program(program: &Program, conf: &ParsedConf, stats: &mut Compila
 pub fn ast_to_sdaccel(expr: &TypedExpr) -> WeldResult<String> {
     if let ExprKind::Lambda { ref params, ref body } = expr.kind {
 
-        let mut kernel_prog = SDAccelKernel::new();
+        let mut kernel_prog = SDAccelKernel::new(&expr.ty);
         let first_block = kernel_prog.funcs[0].add_block();
         for tp in params {
             kernel_prog.funcs[0].params.insert(tp.name.clone(), tp.ty.clone());
         }
+
         //Need to update to support struct
         let sym = gen_expr(body, &mut kernel_prog, 0, first_block)?.unwrap().clone();
         let ty = kernel_prog.buffs.get(&sym).unwrap().clone();
         let sym_size = kernel_prog.find_var_target(&sym);
+        kernel_prog.set_ret_sym(&sym);
 
         let mut prog = SDAccelProgram::new(&expr.ty, params).unwrap();
         prog.sym_gen = SymbolGenerator::from_expression(expr);
@@ -565,6 +706,8 @@ pub fn ast_to_sdaccel(expr: &TypedExpr) -> WeldResult<String> {
         let _buffer_res = prog.allocate_buffer();
         prog.main.add_line("");
         let _set_kernel_buff_res = prog.set_kernel_buffer(&kernel_prog);
+        prog.main.add_line("");
+        let _allocate_result_buffer_res = prog.allocate_result_buffer(&kernel_prog);
         prog.main.add_line("");
         //let _kernel_res = prog.get_kernel_and_queue();
         //prog.main.add_line("");
@@ -590,7 +733,7 @@ pub fn ast_to_sdaccel(expr: &TypedExpr) -> WeldResult<String> {
 
         let mut file = File::create("host.cpp")?;
         let mut kernel_file = File::create("device.cl")?;
-        //println!("{}", template);
+        //println!("{}", final_host.result());
         file.write_all(template.as_bytes())?;
         file.write_all(final_host.result().as_bytes())?;
         kernel_file.write_all(format!("{}", kernel_prog).as_bytes())?;

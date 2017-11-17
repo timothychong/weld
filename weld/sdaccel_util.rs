@@ -13,13 +13,18 @@ pub const SDACCEL_COUNTER_TYPE: Type = Type::Scalar(ScalarKind::I64);
 pub const SDACCEL_BUFFER_MEM_SUFFIX: &'static str = "_mbuf";
 pub const SDACCEL_BUFFER_BUILD_PREFIX: &'static str = "build_buff_";
 
-pub const SDACCEL_RESULT_NAME: &'static str = "result";
+
+pub const SDACCEL_RESULT_PREFIX: &'static str = "result_";
 
 
 pub const SDACCEL_MAIN_PROGRAM: &'static str = "\"main_program\"";
 pub const SDACCEL_MAIN_KERNEL: &'static str = "\"func_0\"";
 
 pub static HOST_CODE: &'static str = include_str!("resources-sdaccel/host.ll");
+
+
+//result
+pub const SDACCEL_RESULT_VECTOR_NAME: &'static str = "result_vector";
 
 
 pub fn gen_scalar_type_from_kind(scalar_kind: &ScalarKind) -> String {
@@ -64,11 +69,15 @@ pub fn gen_var_size_in_byte_typed(param: &TypedParameter) -> String {
 }
 
 pub fn gen_line_size_in_byte_buff(ty: Type, name: &String, target: &String) -> String {
-    assign( gen_var_size_in_byte(name), gen_size_in_byte(ty, target).unwrap())
+    assign( gen_var_size_in_byte(name), gen_size_in_byte(ty, Some(target)).unwrap())
+}
+
+pub fn gen_line_size_in_byte_var(ty: Type, name: &String) -> String {
+    assign( gen_var_size_in_byte(name), gen_size_in_byte(ty, None).unwrap())
 }
 
 pub fn gen_line_size_in_byte(ty: Type, name: &String) -> String {
-    assign( gen_var_size_in_byte(name), gen_size_in_byte(ty, name).unwrap())
+    assign( gen_var_size_in_byte(name), gen_size_in_byte(ty, Some(name)).unwrap())
 }
 
 pub fn gen_line_size_in_byte_typed(param: &TypedParameter) -> String {
@@ -117,7 +126,8 @@ pub fn gen_line_buffer_mem(param: &TypedParameter, cl: &mut SDAccelVar,
 
 //}
 
-pub fn gen_line_alloc_output_buffer_mem_builder(mem_var: &mut SDAccelVar,  index: usize, world: &mut SDAccelVar) -> String {
+pub fn gen_line_alloc_output_buffer_mem_builder(mem_var: &mut SDAccelVar,
+                                                world: &mut SDAccelVar) -> String {
 
     let mut func = SDAccelFuncBuilder {
         ty: SDAccelFuncType::XCLMalloc,
@@ -150,17 +160,27 @@ pub fn gen_sizeof(x:String) -> String {
 
 pub fn gen_size_in_byte_typed(param: &TypedParameter) -> WeldResult<String> {
     let name = &param.name.name;
-    gen_size_in_byte(param.ty.clone(), name)
+    gen_size_in_byte(param.ty.clone(), Some(name))
 }
 
-pub fn gen_size_in_byte(ty: Type, name: &String) -> WeldResult<String> {
-    match ty {
-        Type::Vector(ref boxx) => {
-            let size_name = gen_name_size(name);
-            let kind_name = gen_scalar_type(boxx).unwrap();
-            Ok(format!("{} * {}", size_name, gen_sizeof(kind_name)))
+
+pub fn gen_size_in_byte(ty: Type, name: Option<&String>) -> WeldResult<String> {
+
+    match name {
+        Some(name) => {
+            match ty {
+                Type::Vector(ref boxx) => {
+                    let size_name = gen_name_size(name);
+                    let kind_name = gen_scalar_type(boxx).unwrap();
+                    Ok(format!("{} * {}", size_name, gen_sizeof(kind_name)))
+                }
+                _ => weld_err!("Not supported result type for gen_size_in_type.")
+            }
         }
-        _ => weld_err!("Not supported result type for gen_size_in_type.")
+        None => {
+            Ok(format!("{}", gen_sizeof(gen_scalar_type(&ty)?)))
+        }
+
     }
 }
 
@@ -225,13 +245,13 @@ pub fn gen_arg_type(param: &TypedParameter) -> WeldResult<Vec<String>>{
 pub fn get_sdaccel_type_from_kind(scalar_kind: ScalarKind) -> SDAccelType {
     match scalar_kind {
          // Just use cl_int for everything for now
-         // TODO
+        ScalarKind::I64 => SDAccelType::CLLong,
          _ => SDAccelType::CLInt
     }
 }
 
 
-pub fn gen_set_arg(buffer_sym: Symbol, origin_param: &TypedParameter, mut kernel: SDAccelVar,
+pub fn gen_set_arg(buffer_sym: Symbol, origin_param: &TypedParameter, kernel: SDAccelVar,
                    buffer: bool) -> WeldResult<(String, Option<String>)> {
     let mut vars = Vec::new();
     let mut result = Vec::new();
@@ -270,7 +290,7 @@ pub fn gen_set_arg(buffer_sym: Symbol, origin_param: &TypedParameter, mut kernel
         },
         _ => return weld_err!("Not supported vars type.")
     }
-    for mut var in vars {
+    for var in vars {
         result.push(SDAccelFuncBuilder {
             ty: SDAccelFuncType::XCLSetKernelArg,
             args: vec![
@@ -297,7 +317,7 @@ pub fn gen_set_arg(buffer_sym: Symbol, origin_param: &TypedParameter, mut kernel
     //gen_set_arg(param.ty.clone(), name, index, kernel)
 //}
 
-pub fn OCL_CHECK(s:String) -> String {
+pub fn ocl_check(s:String) -> String {
     format!("OCL_CHECK({});",s)
 }
 
@@ -306,15 +326,28 @@ pub fn gen_comment(comment: &str) -> String{
 }
 
 pub fn gen_name_result(index: usize) -> String {
-    format!("{}{}", SDACCEL_RESULT_NAME, index)
+    format!("{}{}", SDACCEL_RESULT_PREFIX, index)
 }
 
-pub fn gen_wait_event(index: usize, events: &mut SDAccelVar) -> String {
+pub fn gen_name_result_mem(index: usize) -> String {
+    format!("mem_{}{}", SDACCEL_RESULT_PREFIX, index)
+}
+
+pub fn gen_wait_events(index: usize, events: &mut SDAccelVar) -> String {
     SDAccelFuncBuilder {
         ty: SDAccelFuncType::CLWaitForEvents,
         args: vec![
             format!("{}", index),
             events.gen_var_attr("data()"),
+        ]
+    }.emit_line()
+}
+
+pub fn gen_wait_event(index: usize, events: &SDAccelVar) -> String {
+    SDAccelFuncBuilder {
+        ty: SDAccelFuncType::CLWaitForEvent,
+        args: vec![
+            events.gen_ref_idx(index),
         ]
     }.emit_line()
 }

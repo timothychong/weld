@@ -222,7 +222,6 @@ pub enum Statement {
 impl Symbol {
     pub fn index (&self, i:String) -> Symbol{
         let mut s = self.clone();
-        let name = s.name.clone();
         s.name.push_str(&format!("[{}]", i));
         s
     }
@@ -233,20 +232,34 @@ pub struct SDAccelKernel {
     pub funcs: Vec<SDAccelFunction>,
     pub sym_gen: SymbolGenerator,
     pub buffs: HashMap<Symbol, Type>,
-    pub variable_map: HashMap<Symbol, Symbol>
+    pub variable_map: HashMap<Symbol, Symbol>,
 
     // This is for temporary storing things for code gen
+    ret_sym: Option<Symbol>,
+    ret_ty: Type,
 }
 
 
 
 impl SDAccelKernel {
-    pub fn new() -> SDAccelKernel {
+
+    pub fn set_ret_sym(&mut self, sym: &Symbol) {
+        self.ret_sym = Some(sym.clone());
+        self.funcs[0].ret_sym = self.ret_sym.clone();
+    }
+
+    pub fn get_ret_sym(& self)-> Symbol{
+        self.ret_sym.clone().unwrap()
+    }
+
+    pub fn new(ret_ty: &Type) -> SDAccelKernel {
         let mut prog = SDAccelKernel {
             funcs: vec![],
             sym_gen: SymbolGenerator::new(),
             buffs: HashMap::new(),
-            variable_map: HashMap::new()
+            variable_map: HashMap::new(),
+            ret_sym: None,
+            ret_ty: ret_ty.clone()
         };
         //add main
         prog.add_func();
@@ -254,7 +267,7 @@ impl SDAccelKernel {
     }
 
     pub fn add_func(&mut self) -> FunctionId {
-        let func = SDAccelFunction {
+        let mut func = SDAccelFunction {
             id: self.funcs.len(),
             params: HashMap::new(),
             params_size: HashMap::new(),
@@ -263,7 +276,13 @@ impl SDAccelKernel {
             attr: vec![],
             buffs: HashMap::new(),
             buffs_size: HashMap::new(),
+            ret_ty: None,
+            ret_sym: None,
         };
+
+        if self.funcs.len() == 0 {
+            func.ret_ty = Some(self.ret_ty.clone());
+        }
         self.funcs.push(func);
         self.funcs.len() - 1
     }
@@ -353,7 +372,8 @@ pub struct SDAccelFunction {
     pub buffs: HashMap<Symbol, Type>,
     pub buffs_size: HashMap<Symbol, Type>,
     pub params_size: HashMap<Symbol, Type>,
-
+    pub ret_ty: Option<Type>,
+    pub ret_sym: Option<Symbol>,
 }
 
 impl SDAccelFunction {
@@ -389,7 +409,7 @@ impl SDAccelFunction {
         self.buffs_size.extend(extra);
 
         for block in &mut self.blocks {
-            for mut s in &mut block.statements{
+            for s in &mut block.statements{
                 if let Statement::Func {
                     ref name,
                     ref args,
@@ -756,6 +776,31 @@ impl fmt::Display for SDAccelFunction {
                        |e| format!("{} {} {}", gen_scalar_type(e.1).unwrap(), pointer, e.0)
                        )))?;
        }
+       write!(f, ", ")?;
+
+       //for results
+       if self.id == 0 {
+           if let Some(ref ret_ty) = self.ret_ty {
+                match ret_ty {
+                    &Type::Function(_, ref rt ) => {
+                        match **rt {
+                            Type::Vector(ref k) => {
+                                write!(f, "__global {} * {}",
+                                       gen_scalar_type_from_kind(&SDACCEL_SIZE_KIND),
+                                       gen_name_result_mem(0))?;
+                            }
+                            _ => panic!("Only Return type vector supported")
+                        }
+                    }
+
+                    _ => panic!("Only Return type vector supported")
+                }
+
+           }
+
+       }
+
+
 
         write!(f, "){{\n\n")?;
 
@@ -775,6 +820,28 @@ impl fmt::Display for SDAccelFunction {
                 write!(f, "{}", block)?;
             }
         }
+
+       if self.id == 0 {
+           if let Some(ref ret_ty) = self.ret_ty {
+                match ret_ty {
+                    &Type::Function(_, ref rt ) => {
+                        match **rt {
+                            Type::Vector(ref k) => {
+                                write!(f, "*{} = {};",
+                                       gen_name_result_mem(0),
+                                       gen_sym_size_sym( &self.ret_sym.clone().unwrap())
+                                       )?;
+                            }
+                            _ => panic!("Only Return type vector supported")
+                        }
+                    }
+
+                    _ => panic!("Only Return type vector supported")
+                }
+
+           }
+
+       }
         write!(f, "\n}}")?;
         Ok(())
     }
@@ -1134,16 +1201,9 @@ pub fn gen_expr(expr: &TypedExpr,
                             }
                         }
 
-
-
-                        //prog.funcs[body_func].add_func_counter(&lambda_counter.name);
                         //
                         let new_inner_block = prog.funcs[body_func].add_inner_block();
                         let res_sym = gen_expr(body, prog, body_func, new_inner_block)?.unwrap();
-
-                        //println!("YO: {:?}", body);
-
-                        let res_ty = prog.funcs[body_func].locals.get(&res_sym).unwrap().clone();
 
                         //Initialize builder reference
                         prog.funcs[body_func].blocks[body_block].add_statement(
@@ -1157,7 +1217,7 @@ pub fn gen_expr(expr: &TypedExpr,
 
                         //Initialize data references
                         match lambda_var.ty {
-                            Type::Scalar(ty) => {
+                            Type::Scalar(_) => {
                                 inner.push(
                                     // Setting builder reference
                                     InstantiateAssignIndexRight {
