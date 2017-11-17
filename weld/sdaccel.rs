@@ -1,4 +1,3 @@
-use super::ast::*;
 use super::error::*;
 use super::passes::*;
 use super::pretty_print::*;
@@ -528,7 +527,6 @@ impl SDAccelProgram {
                                 gen_scalar_type_from_kind(&k)
                                 )
                             );
-                            self.main.add_line(gen_wait_event(1, &events_cl));
                             self.main.add_line(
                                 ocl_check(
                                 SDAccelFuncBuilder {
@@ -549,6 +547,7 @@ impl SDAccelProgram {
                                     ]
                                 }.emit())
                             );
+                            self.main.add_line(gen_wait_event(1, &events_cl));
                         }  else {
                             return weld_err!("not supported: Vector inner type must be scalar");
                         }
@@ -562,54 +561,6 @@ impl SDAccelProgram {
         }
 
         let buff = self.map_var_buff.get(&build_buffer).unwrap().clone();
-
-        //match *ty {
-            //Type::Vector(ref v) =>  {
-                //// Allocating result buffer
-                ////
-                //if let Type::Scalar(k) = **v {
-                    //self.main.add_line(
-                        //&format!(
-                        //"result->{}.data = ({} *) malloc({});",
-                        //SDACCEL_RESULT_VECTOR_NAME,
-                        //gen_scalar_type_from_kind(&k),
-                        //gen_name_size_in_byte(&build_buffer.name)
-                         //)
-                    //);
-                //}  else {
-                    //return weld_err!("not supported: Vector inner type must be scalar");
-                //}
-
-                //self.main.add_line(
-                    //ocl_check(
-                    //SDAccelFuncBuilder {
-                        //ty: SDAccelFuncType::CLEnqueueReadBuffer,
-                        //args: vec![
-                            //self.command_queue.gen_name(),
-                            //build_buffer.clone().name,
-                            //"CL_TRUE".to_string(),
-                            //"0".to_string(),
-                            //gen_name_size_in_byte(
-                                //&build_buffer.name),
-                            //format!("result->{}.data", SDACCEL_RESULT_VECTOR_NAME),
-                            //"0".to_string(),
-                            //"NULL".to_string(),
-                            //events_cl.gen_ref_idx(0)
-                        //]
-                    //}.emit())
-                //);
-            //}
-            //// TODO
-            //Type::Scalar(_) => {
-                //return weld_err!("enqueuebuffer_read not implmeneted yet");
-            //},
-            //_ => {
-                //return weld_err!("return type not exist");
-            //}
-        //}
-        //Waiting for result transfer
-        //self.main.add_line(gen_wait_event(num, &mut events_cl));
-        //self.events.push(events_cl);
         Ok(())
     }
 
@@ -721,6 +672,7 @@ pub fn ast_to_sdaccel(expr: &TypedExpr) -> WeldResult<String> {
         prog.main.add_line("");
         let _release_res = prog.release();
         prog.main.add_line("return (int64_t) output_result; \n}");
+        prog.main.add_line("#include \"input.h\"");
 
         let template = HOST_CODE.replace("#WELD_VECTORS#", &vector_structs);
 

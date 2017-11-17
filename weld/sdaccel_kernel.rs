@@ -9,8 +9,6 @@ use super::util::*;
 use super::sdaccel_util::*;
 use super::pretty_print::*;
 
-
-
 pub enum Attribute {
     AlwaysInline,
 }
@@ -776,10 +774,12 @@ impl fmt::Display for SDAccelFunction {
                        |e| format!("{} {} {}", gen_scalar_type(e.1).unwrap(), pointer, e.0)
                        )))?;
        }
-       write!(f, ", ")?;
+
+
 
        //for results
        if self.id == 0 {
+           write!(f, ", ")?;
            if let Some(ref ret_ty) = self.ret_ty {
                 match ret_ty {
                     &Type::Function(_, ref rt ) => {

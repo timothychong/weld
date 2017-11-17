@@ -345,8 +345,9 @@ pub fn gen_wait_events(index: usize, events: &mut SDAccelVar) -> String {
 
 pub fn gen_wait_event(index: usize, events: &SDAccelVar) -> String {
     SDAccelFuncBuilder {
-        ty: SDAccelFuncType::CLWaitForEvent,
+        ty: SDAccelFuncType::CLWaitForEvents,
         args: vec![
+            "1".to_string(),
             events.gen_ref_idx(index),
         ]
     }.emit_line()
