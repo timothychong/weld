@@ -17,10 +17,6 @@
 #include <string.h>
 #include <unistd.h>
 #include <sys/time.h>
-#include <omp.h>
-
-// Include the Weld API.
-#include "../../../c/weld.h"
 
 // Value for the predicate to pass.
 #define PASS 19940101
@@ -81,18 +77,6 @@ weld_vector<T> make_weld_vector(T *data, int64_t length) {
 extern "C" int64_t test_run_method_name(int64_t in)
 {
 	return 0;
-}
-
-float run_query(struct gen_data *d) {
-    float final_result = 0.0;
-    for (int i = 0; i < d->num_items; i++) {
-        struct lineitems *items = d->items;
-        if (items->shipdates[i] >= 19940101 && items->shipdates[i] < 19950101 &&
-            items->discounts[i] >= 5.0 && items->discounts[i] <= 7.0 && items->quantities[i] < 24.0) {
-            final_result += (items->discounts[i] * items->extended_prices[i]);
-        }
-    }
-    return final_result;
 }
 
 float run_query_weld(struct gen_data *d) {
@@ -191,19 +175,7 @@ int main(int argc, char **argv) {
     assert(prob >= 0.0 && prob <= 1.0);
 
     struct gen_data d = generate_data(num_items, prob);
-    float result;
-    struct timeval start, end, diff;
-
-    gettimeofday(&start, 0);
-    result = run_query(&d);
-    gettimeofday(&end, 0);
-    timersub(&end, &start, &diff);
-    printf("Single-threaded C++: %ld.%06ld (result=%.4f)\n",
-            (long) diff.tv_sec, (long) diff.tv_usec, result);
-    free_generated_data(&d);
-
-    d = generate_data(num_items, prob);
-    result = run_query_weld(&d);
+    float result = run_query_weld(&d);
     free_generated_data(&d);
 
     return 0;
