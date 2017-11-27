@@ -8,6 +8,8 @@
 #include <vector>
 using std::vector;
 
+#define cl_khr_fp64 double
+
 // Copied from SDAccel examples
 //Allocator template to align buffer to Page boundary for better data transfer
 template <typename T>

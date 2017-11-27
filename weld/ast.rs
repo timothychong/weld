@@ -35,7 +35,7 @@ impl fmt::Display for Symbol {
         if self.id == 0 {
             write!(f, "{}", self.name)
         } else {
-            write!(f, "{}#{}", self.name, self.id)
+            write!(f, "{}_{}", self.name, self.id)
         }
     }
 }
@@ -381,7 +381,7 @@ impl<T: TypeBounds> ExprKind<T> {
             Select { .. } => "Select",
             Lambda  { .. } => "Lambda",
             Apply { .. } => "Apply",
-            CUDF { .. } => "CUDF", 
+            CUDF { .. } => "CUDF",
             NewBuilder(_) => "NewBuilder",
             For { .. } => "For",
             Merge { .. } => "Merge",

@@ -25,6 +25,7 @@ pub static HOST_CODE: &'static str = include_str!("resources-sdaccel/host.ll");
 
 //result
 pub const SDACCEL_RESULT_VECTOR_NAME: &'static str = "result_vector";
+pub const SDACCEL_RESULT_SCALAR_NAME: &'static str = "result_scalar";
 
 
 pub fn gen_scalar_type_from_kind(scalar_kind: &ScalarKind) -> String {
@@ -37,7 +38,7 @@ pub fn gen_scalar_type_from_kind(scalar_kind: &ScalarKind) -> String {
         ScalarKind::I64 => "long",
         ScalarKind::U64 => "unsigned long",
         ScalarKind::F32 => "float",
-        ScalarKind::F64 => "double",
+        ScalarKind::F64 => "cl_khr_fp64",
     })
 }
 
@@ -49,7 +50,29 @@ pub fn gen_scalar_type(ty: &Type) -> WeldResult<String> {
                 Type::Scalar(kind) =>{
                     Ok(format!{"{} *", gen_scalar_type_from_kind(&kind)})
                 }
-                _ => weld_err!("Not supported gen_scalar type inside vector. {:?} ", ty)
+                //TODO
+                _ => Ok(format!("vectornonscalarttype"))
+                    //weld_err!("Not supported gen_scalar type inside vector. {:?} ", ty)
+            }
+        }
+        Type::Builder(ref bk, _) => {
+            match *bk {
+                BuilderKind::Appender(ref ty) => {
+                    if let Type::Scalar(ref kind) = *ty.as_ref() {
+                        Ok(format!{"{} *", gen_scalar_type_from_kind(&kind)})
+                    } else {
+                        return weld_err!("Builderkind not supported in gen_scalar {:?}", ty)
+                    }
+                }
+                BuilderKind::Merger(ref ty, op) => {
+                    if let Type::Scalar(ref kind) = *ty.as_ref() {
+                        Ok(format!{"{} *", gen_scalar_type_from_kind(&kind)})
+                    } else {
+                        return weld_err!("Builderkind merger not supported in gen_scalar {:?}", ty)
+                    }
+
+                }
+                _ => weld_err!("Not supported builder type in gen_scalar_type. {:?} ", ty)
             }
         }
         _ => weld_err!("Not supported gen_scalar type. {:?} ", ty)
@@ -246,6 +269,7 @@ pub fn get_sdaccel_type_from_kind(scalar_kind: ScalarKind) -> SDAccelType {
     match scalar_kind {
          // Just use cl_int for everything for now
         ScalarKind::I64 => SDAccelType::CLLong,
+        ScalarKind::F64 => SDAccelType::CLDouble,
          _ => SDAccelType::CLInt
     }
 }
@@ -422,7 +446,14 @@ pub fn get_release(e: &SDAccelVar) -> WeldResult<String> {
 
 pub fn deref_sym(s:&Symbol) -> Symbol {
     Symbol {
-        name: format!("*{}", s),
+        name: format!("*{}", s.name),
         id:s.id
+    }
+}
+
+pub fn struct_sym(sym:&Symbol, i: usize) -> Symbol {
+    Symbol {
+        name: format!("{}_{}", sym.name, i),
+        id: sym.id,
     }
 }

@@ -22,6 +22,8 @@ impl fmt::Display for Attribute {
     }
 }
 
+
+
 pub type BasicBlockId = usize;
 pub type FunctionId = usize;
 pub type BuffId = usize;
@@ -74,7 +76,7 @@ pub fn print_literal(lit: &LiteralKind) -> String {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub enum Statement {
     BinOp {
         output: Symbol,
@@ -207,13 +209,19 @@ pub enum Statement {
         output: Symbol,
         value: Symbol,
         index: Symbol,
-    }
+    },
 
     //IndexAssignRight {
         //output: Symbol,
         //value: Symbol,
         //index: Symbol,
     //}
+
+    If {
+        cond: Symbol,
+        true_blk: Vec<Statement>,
+        false_blk: Vec<Statement>,
+    }
 }
 
 
@@ -274,6 +282,8 @@ impl SDAccelKernel {
             attr: vec![],
             buffs: HashMap::new(),
             buffs_size: HashMap::new(),
+            // Global map per function
+            all: HashMap::new(),
             ret_ty: None,
             ret_sym: None,
         };
@@ -292,32 +302,73 @@ impl SDAccelKernel {
         }
     }
 
-    pub fn add_buff(&mut self, ty: &Type, func_id: FunctionId)
-        -> WeldResult<(BuffId, Symbol)> {
+    pub fn add_global_buff(&mut self, ty: &Type, func_id: FunctionId)
+        -> WeldResult<(Symbol)> {
 
-        if let Type::Scalar(_) = *ty {
-            let tyy = Type::Vector(Box::new(ty.clone()));
-            let id = self.buffs.len();
-            let sym = self.sym_from_buffid(id);
-            self.funcs[func_id].buffs.insert(sym.clone(), tyy.clone());
-            self.funcs[0].buffs.insert(sym.clone(), tyy.clone());
-            self.buffs.insert(sym.clone(), tyy.clone());
-            Ok((id, sym))
-        } else {
-            weld_err!("Error: add_buff not a scalar type")
+        match *ty {
+            Type::Vector(ref tyy) => {
+                let id = self.buffs.len();
+                let sym = self.sym_from_buffid(id);
+                self.funcs[func_id].add_buff(&sym, ty);
+                self.funcs[0].add_buff(&sym, ty);
+                self.buffs.insert(sym.clone(), ty.clone());
+                Ok((sym))
+            }
+
+            Type::Scalar(_) => {
+                let s = self.new_sym(func_id);
+                self.funcs[func_id].add_buff(&s, ty);
+                self.funcs[0].add_local(&s, ty);
+                Ok(s)
+            }
+
+            _ => weld_err!("Error: add_global_buff not a scalar type")
+
         }
     }
 
     /// Add a local variable of the given type and return a symbol for it.
-    pub fn add_local(&mut self, ty: &Type, func: FunctionId) -> Symbol {
+    pub fn new_sym(&mut self, func:FunctionId) -> Symbol {
         let sym = self.sym_gen.new_symbol(format!("fn{}_tmp", func).as_str());
-        self.funcs[func].locals.insert(sym.clone(), ty.clone());
+        sym
+    }
+
+    pub fn add_local(&mut self, ty: &Type, func: FunctionId) -> Symbol {
+        let sym = self.new_sym(func);
+
+        match *ty {
+            Type::Struct(ref ts) => {
+                for (i, ty) in ts.iter().enumerate() {
+                    let sym_i = struct_sym(&sym, i);
+                    self.funcs[func].locals.insert(sym_i.clone(), ty.clone());
+                    self.funcs[func].all.insert(sym_i.clone(), ty.clone());
+                }
+            }
+            _ => {
+                self.funcs[func].locals.insert(sym.clone(), ty.clone());
+                self.funcs[func].all.insert(sym.clone(), ty.clone());
+            }
+        }
+
         sym
     }
 
     /// Add a local variable of the given type and name
     pub fn add_local_named(&mut self, ty: &Type, sym: &Symbol, func: FunctionId) {
-        self.funcs[func].locals.insert(sym.clone(), ty.clone());
+
+        match *ty {
+            Type::Struct(ref ts) => {
+                for (i, ty) in ts.iter().enumerate() {
+                    let sym = struct_sym(&sym, i);
+                    self.funcs[func].locals.insert(sym.clone(), ty.clone());
+                    self.funcs[func].all.insert(sym.clone(), ty.clone());
+                }
+            }
+            _ => {
+                self.funcs[func].locals.insert(sym.clone(), ty.clone());
+                self.funcs[func].all.insert(sym.clone(), ty.clone());
+            }
+        }
     }
 
     pub fn update_all_func_size_param(&mut self) {
@@ -340,6 +391,72 @@ impl SDAccelKernel {
         }
         //assert!(result != *target);
         return result;
+    }
+
+    pub fn assignments(&self, output:&Symbol, value: &Symbol, ty: &Type,
+              vec: &mut Vec<Statement> ) {
+        use self::Statement::*;
+
+        match *ty {
+            Type::Struct(ref ts) => {
+                for (i, t) in ts.iter().enumerate() {
+                    let output = struct_sym(&output, i);
+                    let value = struct_sym(&value, i);
+                    vec.push(
+                    Assign {
+                            output: output.clone(),
+                            value: value.clone(),
+                    });
+                }
+            }
+            Type::Builder(ref bk, _) => {
+                match *bk {
+                    BuilderKind::Merger(_, ref op) => {
+                        vec.push(
+                        Assign {
+                            output: output.clone(),
+                            value: value.clone(),
+                            });
+                        //Assign {
+                            //output: deref_sym(&output),
+                            //value: deref_sym(&value),
+                            //});
+                    }
+                    _ => {
+                            vec.push(
+                            Assign {
+                                output: output.clone(),
+                                value: value.clone(),
+                                });
+                    }
+                }
+
+            }
+            _ => {
+                    vec.push(
+                    Assign {
+                        output: output.clone(),
+                        value: value.clone(),
+                        });
+            }
+
+        }
+
+
+    }
+
+    pub fn assign(&mut self, output:&Symbol, value: &Symbol, ty: &Type,
+              cur_func:FunctionId, cur_block: BasicBlockId ) {
+
+        let mut v = Vec::new();
+        self.assignments(output, value, ty, &mut v);
+        for s in v {
+            self.funcs[cur_func].blocks[cur_block].add_statement(
+                s.clone()
+            );
+        }
+
+
     }
 }
 
@@ -364,14 +481,15 @@ pub fn extra_vec_with_size(hm: &HashMap<Symbol, Type>) -> HashMap<Symbol, Type> 
 pub struct SDAccelFunction {
     pub id: FunctionId,
     pub blocks: Vec<BasicBlock>,
-    pub locals: HashMap<Symbol, Type>,
-    pub params: HashMap<Symbol, Type>,
     pub attr: Vec<Attribute>,
-    pub buffs: HashMap<Symbol, Type>,
-    pub buffs_size: HashMap<Symbol, Type>,
-    pub params_size: HashMap<Symbol, Type>,
+    locals: HashMap<Symbol, Type>,
+    params: HashMap<Symbol, Type>,
+    buffs: HashMap<Symbol, Type>,
+    buffs_size: HashMap<Symbol, Type>,
+    params_size: HashMap<Symbol, Type>,
     pub ret_ty: Option<Type>,
     pub ret_sym: Option<Symbol>,
+    pub all: HashMap<Symbol, Type>,
 }
 
 impl SDAccelFunction {
@@ -385,6 +503,7 @@ impl SDAccelFunction {
         self.add_block_full(true)
     }
 
+
     pub fn add_block_full(&mut self, is_inner_block:bool) -> BasicBlockId {
         let block = BasicBlock {
             id: self.blocks.len(),
@@ -393,6 +512,20 @@ impl SDAccelFunction {
         };
         self.blocks.push(block);
         self.blocks.len() - 1
+    }
+    pub fn add_buff(&mut self, sym: &Symbol, ty: &Type) {
+        self.buffs.insert(sym.clone(), ty.clone());
+        self.all.insert(sym.clone(), ty.clone());
+    }
+
+    pub fn add_param(&mut self, sym: &Symbol, ty: &Type) {
+        self.params.insert(sym.clone(), ty.clone());
+        self.all.insert(sym.clone(), ty.clone());
+    }
+
+    pub fn add_local(&mut self, sym: &Symbol, ty: &Type) {
+        self.locals.insert(sym.clone(), ty.clone());
+        self.all.insert(sym.clone(), ty.clone());
     }
 
     pub fn func_name(& self) -> String {
@@ -417,6 +550,7 @@ impl SDAccelFunction {
                 } = s.clone() {
                     let args_size = extra_vec_with_size(args);
                     let buffs_size = extra_vec_with_size(buffs);
+                    // Processing buff
                     *s = Statement::Func {
                         args: args.clone(),
                         buffs: buffs.clone(),
@@ -430,18 +564,12 @@ impl SDAccelFunction {
 
     }
 
-    pub fn find_sym_type(& self, sym: &Symbol) -> WeldResult<Type>{
-        if let Some(x) = self.locals.get(&sym) {
-            return Ok(x.clone())
-        }
-        if let Some(x) = self.params.get(&sym) {
-            return Ok(x.clone())
-        }
-        if let Some(x) = self.buffs.get(&sym) {
-            return Ok(x.clone())
-        }
-        weld_err!("Find_Sym_Type not found")
-    }
+    //pub fn find_sym_type(& self, sym: &Symbol) -> WeldResult<Type>{
+        //if let Some(x) = self.all.get(&sym) {
+            //return Ok(x.clone())
+        //}
+        //weld_err!("Find_Sym_Type not found: {:?}", sym)
+    //}
 
     pub fn add_func_counter(&mut self, sym: &Symbol) {
         if !self.locals.contains_key(sym) {
@@ -611,10 +739,20 @@ impl fmt::Display for Statement {
                     write!(f, ", ")?;
                 }
                 write!(f, "{}", join("", ", ", "", sorted_args_size.iter().map(|e| format!("&{}", e.0))))?;
+
+               fn get_cl_arg (ty: &Type, sym: &Symbol) -> String {
+                   match *ty {
+                    Type::Scalar(_) => format!("&{}", sym),
+                       _ => format!("{}", sym),
+                   }
+               }
                 if sorted_buffs.len() > 0 {
                     write!(f, ", ")?;
                 }
-                write!(f, "{}", join("", ", ", "", sorted_buffs.iter().map(|e| format!("{}", e.0))))?;
+                write!(f, "{}", join("", ", ", "",
+                                     sorted_buffs.iter().map(
+                                         |e| format!("{}", get_cl_arg(&e.1, &e.0)))))?;
+
                 if sorted_buffs_size.len() > 0 {
                     write!(f, ", ")?;
                 }
@@ -629,11 +767,11 @@ impl fmt::Display for Statement {
                 ref end,
                 ref inner,
             } => {
-                write!(f, "__attribute__((xcl_pipeline_loop))\nfor({}; {}; {}){{\n{}\n  }}",
+                write!(f, "__attribute__((xcl_pipeline_loop))\n  for({}; {}; {}){{\n{}\n  }}",
                     join("", ", ", "", init.iter().map(|e| format!("{}", e))),
-                    join("", ", ", "", cond.iter().map(|e| format!("{}", e))),
+                    join("", " && ", "", cond.iter().map(|e| format!("{}", e))),
                     join("", ", ", "", end.iter().map(|e| format!("{}", e))),
-                    join("", ";\n", ";\n", inner.iter().map(|e| format!("\t{}", e))),
+                    join("    ", ";\n    ", ";\n", inner.iter().map(|e| format!("\t{}", e))),
                 )
 
             }
@@ -713,6 +851,25 @@ impl fmt::Display for Statement {
                 write!(f, "{}[{}] = {}", output, index, value)
             }
 
+            If {
+                ref cond,
+                ref true_blk,
+                ref false_blk,
+            } => {
+                write!(f, "if({})", cond)?;
+                write!(f, "{{\n")?;
+                if true_blk.len() != 0 {
+                    write!(f, "{}", join("", ";\n", ";\n",
+                                     true_blk.iter().map(|e| format!("\t{}", e))))?;
+                }
+                write!(f, "    }} else {{\n    ")?;
+                if false_blk.len() != 0{
+                    write!(f, "  {}", join("", ";\n", ";\n",
+                                   false_blk.iter().map(|e| format!("\t{}", e))))?;
+                }
+                write!(f, "  }}")
+            }
+
 
         }
     }
@@ -739,11 +896,20 @@ impl fmt::Display for SDAccelFunction {
             write!(f, "__attribute__ (({}))\n", attr)?;
         }
        write!(f,"void {}", self.func_name())?;
+
+       fn get_cl_type_param (ty: &Type) -> String {
+           match *ty {
+            Type::Vector(_) => format!("__global {}", gen_scalar_type(ty).unwrap()),
+            Type::Scalar(_) => format!("{} ", gen_scalar_type(ty).unwrap()),
+               _ => String::from("")
+           }
+
+       }
        //Params here
         let params_sorted: BTreeMap<&Symbol, &Type> = self.params.iter().collect();
        write!(f, "{}", join("(", ", ", "",
                params_sorted.iter().map(
-                   |e| format!("__global {} {}", gen_scalar_type(e.1).unwrap(), e.0)
+                   |e| format!("{} {}", get_cl_type_param(e.1), e.0)
                    )))?;
 
         let paramsize_sorted: BTreeMap<&Symbol, &Type> = self.params_size.iter().collect();
@@ -759,9 +925,18 @@ impl fmt::Display for SDAccelFunction {
        if buffs_sorted.len() > 0 {
            write!(f, ", ")?;
        }
+
+       fn get_cl_type (ty: &Type) -> String {
+           match *ty {
+            Type::Vector(_) => format!("__global {}", gen_scalar_type(ty).unwrap()),
+            Type::Scalar(_) => format!("{} *", gen_scalar_type(ty).unwrap()),
+               _ => String::from("")
+           }
+       }
+
        write!(f, "{}", join("", ", ", "",
                buffs_sorted.iter().map(
-                   |e| format!("__global {} {}", gen_scalar_type(e.1).unwrap(), e.0)
+                   |e| format!("{} {}", get_cl_type(e.1), e.0)
                    )))?;
 
        if self.id > 0 {
@@ -789,18 +964,22 @@ impl fmt::Display for SDAccelFunction {
                                        gen_scalar_type_from_kind(&SDACCEL_SIZE_KIND),
                                        gen_name_result_mem(0))?;
                             }
-                            _ => panic!("Only Return type vector supported")
+
+                            Type::Scalar(ref k) => {
+                                write!(f, "__global {} * {}",
+                                       gen_scalar_type_from_kind(k),
+                                       gen_name_result_mem(0))?;
+                            }
+                            _ => panic!("Only Return type vector + scalar supported")
                         }
                     }
 
-                    _ => panic!("Only Return type vector supported")
+                    _ => panic!("Only Return type vector + scalar supported")
                 }
 
            }
 
        }
-
-
 
         write!(f, "){{\n\n")?;
 
@@ -832,11 +1011,16 @@ impl fmt::Display for SDAccelFunction {
                                        gen_sym_size_sym( &self.ret_sym.clone().unwrap())
                                        )?;
                             }
-                            _ => panic!("Only Return type vector supported")
+                            Type::Scalar(ref k) => {
+                                write!(f, "*{} = {};",
+                                       gen_name_result_mem(0),
+                                       &self.ret_sym.clone().unwrap()
+                                       )?;
+                            }
+                            _ => panic!("Only Return type vector + scalar supported")
                         }
                     }
-
-                    _ => panic!("Only Return type vector supported")
+                    _ => panic!("Only Return type vector + scalar supported")
                 }
 
            }
@@ -853,6 +1037,7 @@ impl fmt::Display for SDAccelKernel {
             if func.id != 0  {
                 write!(f, "{}\n\n", func)?;
             }
+
         }
         write!(f, "{}\n\n", self.funcs[0])?;
 
@@ -867,12 +1052,24 @@ pub fn gen_expr(expr: &TypedExpr,
                 prog: &mut SDAccelKernel,
                 cur_func: FunctionId,
                 cur_block: BasicBlockId,
-                ) -> WeldResult<Option<Symbol>> {
+                ) -> WeldResult<Symbol> {
 
     use self::Statement::*;
     match expr.kind {
 
-        ExprKind::Ident(ref sym) => Ok(Some(sym.clone())),
+        ExprKind::Ident(ref sym) => {
+            if let None = prog.funcs[cur_func].all.get(sym) {
+                match &prog.funcs[0].all.clone().get(sym) {
+                    &Some(ref ty) => {
+                        prog.funcs[cur_func].add_param(sym, &ty);
+                    }
+                    &None => {}
+                }
+            }
+
+
+            Ok(sym.clone())
+        },
 
         ExprKind::Literal(lit) => {
             let res_sym = prog.add_local(&expr.ty, cur_func);
@@ -881,7 +1078,7 @@ pub fn gen_expr(expr: &TypedExpr,
                                                                      value: lit,
                                                                  });
             //prog.assign_var_map(&res_sym, lit);
-            Ok(Some(res_sym))
+            Ok(res_sym)
         }
 
         ExprKind::Let {
@@ -889,28 +1086,25 @@ pub fn gen_expr(expr: &TypedExpr,
             ref value,
             ref body,
         } => {
-            let val = gen_expr(value, prog, cur_func, cur_block).unwrap().unwrap();
-            prog.add_local_named(&value.ty, name, cur_func);
-            prog.funcs[cur_func].blocks[cur_block].add_statement(Assign {
-                                                                     output: name.clone(),
-                                                                     value: val.clone(),
-                                                                 });
+            let val = gen_expr(value, prog, cur_func, cur_block)?;
 
-            //Create alias for vector size
-            match value.ty {
-                Type::Vector(_) => {
+            prog.add_local_named(&value.ty, name, cur_func);
+
+            prog.assign(&name, &val, &value.ty, cur_func, cur_block);
+
+            if let Type::Vector(_) = value.ty {
+                //Create alias for vector size
                     let name = gen_sym_size_sym(name);
                     let val = gen_sym_size_sym(&val);
                     prog.add_local_named(&SDACCEL_SIZE_TYPE, &name, cur_func);
-                prog.funcs[cur_func].blocks[cur_block].add_statement(Assign {
+                    prog.funcs[cur_func].blocks[cur_block].add_statement(Assign {
                                                                          output: name.clone(),
                                                                          value: val.clone(),
                                                                      });
+            };
 
-                }
-                _ => {}
-            }
-            gen_expr(body, prog, cur_func, cur_block)
+            let body_sym = gen_expr(body, prog, cur_func, cur_block)?;
+            Ok(body_sym)
         }
 
         ExprKind::BinOp {
@@ -918,8 +1112,8 @@ pub fn gen_expr(expr: &TypedExpr,
             ref left,
             ref right,
         } => {
-            let left_sym = gen_expr(left, prog, cur_func, cur_block)?.unwrap();
-            let right_sym = gen_expr(right, prog, cur_func, cur_block)?.unwrap();
+            let left_sym = gen_expr(left, prog, cur_func, cur_block)?;
+            let right_sym = gen_expr(right, prog, cur_func, cur_block)?;
             let res_sym = prog.add_local(&expr.ty, cur_func);
             prog.funcs[cur_func].blocks[cur_block].add_statement(BinOp {
                                                                      output: res_sym.clone(),
@@ -927,21 +1121,21 @@ pub fn gen_expr(expr: &TypedExpr,
                                                                      left: left_sym,
                                                                      right: right_sym,
                                                                  });
-            Ok(Some(res_sym))
+            Ok(res_sym)
         }
 
         ExprKind::UnaryOp {
             kind,
             ref value,
         } => {
-            let value_sym = gen_expr(value, prog, cur_func, cur_block)?.unwrap();
+            let value_sym = gen_expr(value, prog, cur_func, cur_block)?;
             let res_sym = prog.add_local(&expr.ty, cur_func);
             prog.funcs[cur_func].blocks[cur_block].add_statement(UnaryOp {
                 output: res_sym.clone(),
                 op: kind,
                 child: value_sym,
             });
-            Ok(Some(res_sym))
+            Ok(res_sym)
         }
 
         //ExprKind::Negate(ref child_expr) => {
@@ -952,9 +1146,14 @@ pub fn gen_expr(expr: &TypedExpr,
             //println!("Broadcast")
         //}
 
-        //ExprKind::Cast { ref child_expr, .. } => {
-            //println!("Cast")
-        //}
+        ExprKind::Cast { ref child_expr, .. } => {
+            let child_sym = gen_expr(child_expr, prog, cur_func, cur_block)?;
+            let res_sym = prog.add_local(&expr.ty, cur_func);
+
+            prog.assign(&res_sym, &child_sym, &expr.ty, cur_func, cur_block);
+
+            Ok(res_sym)
+        }
 
         //ExprKind::Lookup {
             //ref data,
@@ -995,13 +1194,46 @@ pub fn gen_expr(expr: &TypedExpr,
             Ok(data_sym)
         }
 
-        //ExprKind::If {
-            //ref cond,
-            //ref on_true,
-            //ref on_false,
-        //} => {
-            //println!("If")
-        //}
+        ExprKind::If {
+            ref cond,
+            ref on_true,
+            ref on_false,
+        } => {
+            let cond_sym = gen_expr(cond, prog, cur_func, cur_block)?;
+
+            let true_block = prog.funcs[cur_func].add_inner_block();
+            let false_block = prog.funcs[cur_func].add_inner_block();
+
+            let on_true_sym = gen_expr(on_true, prog, cur_func, true_block)?;
+            let on_false_sym = gen_expr(on_false, prog, cur_func, false_block)?;
+
+            let res_sym = prog.add_local(&expr.ty, cur_func);
+
+            let mut true_stats = Vec::new();
+            let mut false_stats = Vec::new();
+
+            for s in &prog.funcs[cur_func].blocks[true_block].statements {
+                true_stats.push(s.clone());
+            }
+
+
+            for s in &prog.funcs[cur_func].blocks[false_block].statements {
+                false_stats.push(s.clone());
+            }
+
+            prog.assignments(&res_sym, &on_true_sym, &expr.ty, &mut true_stats);
+            prog.assignments(&res_sym, &on_false_sym, &expr.ty, &mut false_stats);
+
+
+            prog.funcs[cur_func].blocks[cur_block].add_statement(
+                If {
+                    cond: cond_sym,
+                    true_blk: true_stats.clone(),
+                    false_blk: false_stats.clone(),
+                }
+            );
+            Ok(res_sym)
+        }
 
         //ExprKind::Iterate {
             //ref initial,
@@ -1014,8 +1246,47 @@ pub fn gen_expr(expr: &TypedExpr,
             ref builder,
             ref value,
         } => {
-            let res_sym = gen_expr(value, prog, cur_func, cur_block)?;
-            Ok(res_sym)
+
+            let builder_sym = gen_expr(builder, prog, cur_func, cur_block)?;
+            let value_sym = gen_expr(value, prog, cur_func, cur_block)?;
+
+            let counter_sym = gen_sym_size_sym(&builder_sym);
+
+            if let Type::Builder(ref bk, _) = builder.as_ref().ty {
+                match *bk {
+                    BuilderKind::Merger(_, ref op) => {
+                        prog.funcs[cur_func].blocks[cur_block].add_statement(BinOp {
+                                                     output: deref_sym(&builder_sym),
+                                                     op: *op,
+                                                     left: deref_sym(&builder_sym),
+                                                     right: value_sym,
+                                                 });
+
+                    }
+                    BuilderKind::Appender(ref ty) => {
+                       prog.funcs[cur_func].blocks[cur_block].add_statement(
+                            IndexAssignLeft{
+                                output: builder_sym.clone(),
+                                index: deref_sym(&counter_sym),
+                                value: value_sym.clone()
+                            }
+                       );
+                       prog.funcs[cur_func].blocks[cur_block].add_statement(
+                            AssignStatement {
+                                output: deref_sym(&counter_sym),
+                                right: Box::new(BinOpLiteralRight {
+                                    left: deref_sym(&counter_sym),
+                                    op: BinOpKind::Add,
+                                    right: LiteralKind::U32Literal(1),
+                                })
+                            }
+                       );
+                    }
+                    _ => return weld_err!("Builder type not supported inside Merge")
+                }
+            };
+
+            Ok(builder_sym.clone())
         }
 
         ExprKind::Res { ref builder } => {
@@ -1031,11 +1302,10 @@ pub fn gen_expr(expr: &TypedExpr,
 
                     if let ExprKind::Length{ref data} = e.kind {
                         if let Type::Vector(ref ty) = data.ty{
-                            let (_ , nbuilder) = prog.add_buff(&(*ty), cur_func)?;
-                            //println!("buff: {:?} e: {:?}", nbuilder, e);
+                            let nbuilder = prog.add_global_buff(&(data.ty), cur_func)?;
 
                             //For now always create a new buffer
-                            Ok(Some(nbuilder))
+                            Ok(nbuilder)
 
                         } else {
                             return weld_err! ("Length can only be of a vector");
@@ -1050,10 +1320,20 @@ pub fn gen_expr(expr: &TypedExpr,
                     if let Type::Builder(ref bk, _) = expr.ty {
                         match *bk {
                             BuilderKind::Appender(ref t) => {
-                                let (_ , nbuilder) = prog.add_buff(&*t, cur_func)?;
-                                return Ok(Some(nbuilder))
+                                let ty = Type::Vector(t.clone());
+                                let nbuilder = prog.add_global_buff(&ty, cur_func)?;
+                                return Ok(nbuilder)
                             }
-                            _ => return weld_err!("Builder type not supported: {}", print_expr(expr))
+
+                            BuilderKind::Merger(ref t, k) => {
+                                let nbuilder = prog.add_global_buff(t.as_ref(),
+                                                    cur_func)?;
+                                return Ok(nbuilder)
+                            }
+
+                            _ =>
+                                return weld_err!("Builder type not supported: {}",
+                                                 print_expr(expr))
                         }
                     } else {
                         return weld_err!("New Builder Type not a builder")
@@ -1063,9 +1343,21 @@ pub fn gen_expr(expr: &TypedExpr,
             }
         }
 
-        //ExprKind::MakeStruct { ref elems } => {
-            //println!("Make struct")
-        //}
+        ExprKind::MakeStruct { ref elems } => {
+            let es_sym = prog.add_local(&expr.ty, cur_func);
+            for (i, e) in elems.iter().enumerate() {
+                let e_sym = gen_expr(e, prog, cur_func, cur_block)?;
+                let e_sym_i = struct_sym(&e_sym, i);
+
+                prog.funcs[cur_func].blocks[cur_block].add_statement(
+                    Assign {
+                        output: struct_sym(&es_sym, i).clone(),
+                        value: e_sym_i.clone(),
+                });
+
+            }
+            Ok(es_sym)
+        }
 
         //ExprKind::MakeVector { ref elems } => {
             //println!("Make Vector")
@@ -1080,10 +1372,10 @@ pub fn gen_expr(expr: &TypedExpr,
         //}
 
         ExprKind::GetField { ref expr, index } => {
-            let mut res_sym = gen_expr(expr, prog, cur_func, cur_block)?.unwrap();
+            let mut res_sym = gen_expr(expr, prog, cur_func, cur_block)?;
             // Combining id ito field
-            res_sym.name = format!("{}_{}", res_sym.name, index);
-            Ok(Some(res_sym))
+            let sym = struct_sym(&res_sym, index as usize);
+            Ok(sym)
 
         }
 
@@ -1110,92 +1402,113 @@ pub fn gen_expr(expr: &TypedExpr,
                         let mut end:Vec<Statement> = Vec::new();
                         let mut inner:Vec<Statement> = Vec::new();
 
-                        let builder_sym = gen_expr(builder, prog, body_func, body_block)?.unwrap();
-                        let build_ty = prog.funcs[body_func].buffs.get(&builder_sym).unwrap().clone();
+                        let builder_sym = gen_expr(builder, prog, body_func, body_block)?;
 
                         let lambda_builder = params[0].clone();
-                        let lambda_counter = deref_sym(&gen_sym_size_sym(&builder_sym).clone());
+                        let counter_sym = gen_sym_size_sym(&lambda_builder.name);
                         let lambda_var = params[2].clone();
 
+                        if let Type::Builder(ref bk, _) = builder.as_ref().ty {
+                            match *bk {
+                                BuilderKind::Appender(ref ty) => {
+                                    //Initialize builder reference
+                                    prog.funcs[body_func].blocks[body_block].add_statement(
+                                        // Setting builder reference
+                                        GlobalInstantiateAssign {
+                                            left: lambda_builder.name.clone(),
+                                            ty: builder.as_ref().ty.clone(),
+                                            right: builder_sym.clone(),
+                                        }
+                                    );
+
+                                    prog.funcs[body_func].blocks[body_block].add_statement(
+                                        // Setting builder reference
+                                        InstantiateAssign {
+                                            left: deref_sym(&counter_sym),
+                                            ty: SDACCEL_SIZE_TYPE.clone(),
+                                            right: gen_sym_size_sym(&builder_sym),
+                                        }
+                                    );
+                                    prog.funcs[body_func].blocks[body_block].add_statement(
+                                            AssignLiteral {
+                                                output: deref_sym(&counter_sym),
+                                                value: LiteralKind::U32Literal(0),
+                                            }
+                                    );
+                                }
+
+                                BuilderKind::Merger(ref ty, ref op) => {
+
+                                    prog.funcs[body_func].blocks[body_block].add_statement(
+                                        InstantiateAssign {
+                                            left: deref_sym(&lambda_builder.name),
+                                            ty: ty.as_ref().clone(),
+                                            right: builder_sym.clone(),
+                                        }
+                                    );
+                                    //
+                                    prog.funcs[body_func].blocks[body_block].add_statement(
+                                            AssignLiteral {
+                                                output: deref_sym(&lambda_builder.name),
+                                                value: LiteralKind::U32Literal(0),
+                                            }
+                                    );
+
+
+                                }
+                                _ => return weld_err!("Builder type not supported inside For")
+                            }
+                        }
+
+                        let lambda_counter = deref_sym(&gen_sym_size_sym(&builder_sym).clone());
+
                         let mut var_syms:Vec<Symbol> = Vec::new();
-                        let mut counter_syms:Vec<Symbol> = Vec::new();
+                        let counter_sym = prog.add_local(&SDACCEL_COUNTER_TYPE, body_func);
 
                         // For each item in the iterators
-                        for iter in iters {
+                        // Here we assume that all iterators have the same length
+                        for (i, iter) in iters.iter().enumerate() {
                             match iter.kind {
                                 IterKind::ScalarIter => {
                                     let before_data = gen_expr(&iter.data, prog, cur_func, cur_block)?;
 
+                                    let data:Symbol = before_data;
 
-                                    //Get the symbol for the data
-                                    //let data:Symbol;
-                                    //match before_data {
-                                        //None => {
-                                            ////TODO
-                                            //println!("ITER: {}", print_expr(&iter.data));
-                                            //data = Symbol {
-                                                //name:format!("FOO"),
-                                                //id:0,
-                                            //};
-                                        //}
-                                        //Some(d) => {
-
-                                            //data = d;
-                                        //}
-                                    //}
-                                    let data:Symbol = before_data.unwrap();
-
-                                    // Get the symbol and then add it to the parameter
-                                    //let ty = match prog.funcs[body_func].locals.get(&data){
-                                        //// If you find it in local var.
-                                        //// Do you still need to add it to params?
-                                        //Some(d) => d.clone(),
-                                        //// Look for it in global
-                                        //None => {
-                                            //prog.funcs[0].find_sym_type(&data)?
-                                        //}
-                                    //};
-                                    let ty = prog.funcs[0].find_sym_type(&data)?;
                                     var_syms.push(data.clone());
-                                    prog.funcs[body_func].params.insert(data.clone(), ty.clone());
 
-                                    prog.assign_var_map(
-                                        &data,
-                                        &builder_sym,
-                                    );
+                                    prog.funcs[body_func].params.insert(data.clone(),
+                                                                iter.data.ty.clone());
 
-                                    //Create counter for iterator
-                                    let counter_sym = prog.add_local(&SDACCEL_COUNTER_TYPE, body_func);
-                                    //let counter_sym = &counter_sym_before_deref;
-                                    //let counter_sym = deref_sym(&gen_sym_size_sym(&builder_sym));
+                                    if i == 0 {
 
-                                    //Right now only assume loop through entire array
-                                    init.push(
-                                        AssignLiteral {
-                                            output: counter_sym.clone(),
-                                            value: LiteralKind::U32Literal(0),
-                                        }
-                                    );
-                                    cond.push(
-                                        BinOpNoAssign {
-                                            left: counter_sym.clone(),
-                                            right: deref_sym(&gen_sym_size_sym(&data)),
-                                            op: BinOpKind::LessThan,
-                                        }
-                                    );
-                                    end.push(
-                                        AssignStatement {
-                                            output: counter_sym.clone(),
-                                            right: Box::new(BinOpLiteralRight {
+                                        prog.assign_var_map(
+                                            &data,
+                                            &builder_sym,
+                                        );
+                                        init.push(
+                                            AssignLiteral {
+                                                output: counter_sym.clone(),
+                                                value: LiteralKind::U32Literal(0),
+                                            }
+                                        );
+                                        cond.push(
+                                            BinOpNoAssign {
                                                 left: counter_sym.clone(),
-                                                op: BinOpKind::Add,
-                                                right: LiteralKind::U32Literal(1),
-                                            })
-                                        }
-                                    );
-                                    counter_syms.push(counter_sym);
-
-
+                                                right: deref_sym(&gen_sym_size_sym(&data)),
+                                                op: BinOpKind::LessThan,
+                                            }
+                                        );
+                                        end.push(
+                                            AssignStatement {
+                                                output: counter_sym.clone(),
+                                                right: Box::new(BinOpLiteralRight {
+                                                    left: counter_sym.clone(),
+                                                    op: BinOpKind::Add,
+                                                    right: LiteralKind::U32Literal(1),
+                                                })
+                                            }
+                                        );
+                                    }
                                 }
                                 _ => return weld_err!("Only ScalarIter is supported: {}", print_expr(func))
                             }
@@ -1203,17 +1516,8 @@ pub fn gen_expr(expr: &TypedExpr,
 
                         //
                         let new_inner_block = prog.funcs[body_func].add_inner_block();
-                        let res_sym = gen_expr(body, prog, body_func, new_inner_block)?.unwrap();
+                        let body_sym = gen_expr(body, prog, body_func, new_inner_block)?;
 
-                        //Initialize builder reference
-                        prog.funcs[body_func].blocks[body_block].add_statement(
-                            // Setting builder reference
-                            GlobalInstantiateAssign {
-                                left: lambda_builder.name.clone(),
-                                ty: build_ty.clone(),
-                                right: builder_sym.clone(),
-                            }
-                        );
 
                         //Initialize data references
                         match lambda_var.ty {
@@ -1224,20 +1528,19 @@ pub fn gen_expr(expr: &TypedExpr,
                                         left: lambda_var.name.clone(),
                                         ty: lambda_var.ty.clone(),
                                         right: var_syms[0].clone(),
-                                        index: counter_syms[0].clone(),
+                                        index: counter_sym.clone(),
                                     }
                                 );
                             }
                             Type::Struct(vs) => {
                                 for (i, v) in vs.iter().enumerate() {
-                                    let mut name_pre = lambda_var.name.clone();
-                                    name_pre.name.push_str(&format!("_{}", i));
+                                    let var_i = struct_sym(&lambda_var.name, i);
                                     inner.push(
                                         InstantiateAssignIndexRight {
-                                            left: name_pre.clone(),
+                                            left: var_i.clone(),
                                             ty: v.clone(),
                                             right: var_syms[i].clone(),
-                                            index: counter_syms[i].clone(),
+                                            index: counter_sym.clone(),
                                         }
                                     );
                                 }
@@ -1246,37 +1549,26 @@ pub fn gen_expr(expr: &TypedExpr,
                         }
 
 
+
                         //Copying things back. a little hacky
                         for s in &prog.funcs[body_func].blocks[new_inner_block].statements {
                             inner.push(s.clone());
                         }
 
-                        // Assigning output
-                        inner.push(
-                            IndexAssignLeft{
-                                output: lambda_builder.name.clone(),
-                                index: lambda_counter.clone(),
-                                value: res_sym
-                            }
-                        );
-                        //Builder iterator
-                        init.push(
-                            AssignLiteral {
-                                output: lambda_counter.clone(),
-                                value: LiteralKind::U32Literal(0),
-                            }
-                        );
 
-                        end.push(
-                            AssignStatement {
-                                output: lambda_counter.clone(),
-                                right: Box::new(BinOpLiteralRight {
-                                    left: lambda_counter.clone(),
-                                    op: BinOpKind::Add,
-                                    right: LiteralKind::U32Literal(1),
-                                })
+                        let mut assign_back = Vec::new();
+                        if let Type::Builder(ref bk, _) = builder.as_ref().ty {
+                            match *bk {
+                                BuilderKind::Merger(ref ty, ref op) => {
+                                    prog.assignments(&lambda_builder.name,
+                                    &body_sym, &body.ty, &mut assign_back);
+                                }
+                                _ => {}
                             }
-                        );
+                        };
+                        for s in &assign_back {
+                            inner.push(s.clone());
+                        }
 
                         prog.funcs[body_func].blocks[body_block].add_statement(
                             For {
@@ -1303,7 +1595,7 @@ pub fn gen_expr(expr: &TypedExpr,
                             });
 
 
-                        Ok(Some(builder_sym))
+                        Ok(builder_sym)
 
                     } else {
                         weld_err!("Argument to For was not a Lambda inside For: {}", print_expr(func))
@@ -1314,7 +1606,7 @@ pub fn gen_expr(expr: &TypedExpr,
             }
         }
         _ => {
-            return weld_err!("Unsupported expression: {}", print_expr(expr));
+            return weld_err!("Unsupported expression: {}\n{:?}", print_expr(expr), expr);
         }
     }
 
