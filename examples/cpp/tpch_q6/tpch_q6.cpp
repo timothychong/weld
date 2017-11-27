@@ -16,7 +16,6 @@
 #include <assert.h>
 #include <string.h>
 #include <unistd.h>
-#include <sys/time.h>
 
 // Value for the predicate to pass.
 #define PASS 19940101
@@ -80,8 +79,6 @@ extern "C" int64_t test_run_method_name(int64_t in)
 }
 
 float run_query_weld(struct gen_data *d) {
-    struct timeval start, end, diff;
-    gettimeofday(&start, 0);
    	struct args args;
    	args.shipdates = make_weld_vector<int32_t>(d->items->shipdates, d->num_items);
    	args.discounts = make_weld_vector<float>(d->items->discounts, d->num_items);
@@ -89,15 +86,10 @@ float run_query_weld(struct gen_data *d) {
    	args.extended_prices = make_weld_vector<float>(d->items->extended_prices, d->num_items);
 
    	// Run the module and get the result.
-    output_result_t *output = (output_result_t *) test_run_method_name((int64_t) &args);
-    results_t *result = (results_t *) output->data;
-
-    gettimeofday(&end, 0);
-    timersub(&end, &start, &diff);
-    printf("Weld: %ld.%06ld (result=%.4f)\n", 
-    	(long) diff.tv_sec, (long) diff.tv_usec, result->result_scalar);
-
-    return result->result_scalar;
+    return (float) test_run_method_name((int64_t) &args);
+    // output_result_t *output = (output_result_t *) test_run_method_name((int64_t) &args);
+    // results_t *result = (results_t *) output->data;
+    // return result->result_scalar;
 }
 
 /** Generates input data.
