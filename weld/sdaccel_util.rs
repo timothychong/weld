@@ -6,6 +6,9 @@ use super::sdaccel_type::*;
 pub const SDACCEL_ARG_SEPARATOR: &'static str = ", ";
 pub const SDACCEL_ARG_POINTER: &'static str = "* ";
 pub const SDACCEL_SIZE_SUFFIX: &'static str = "_size";
+pub const SDACCEL_INNER_SIZE_SUFFIX: &'static str = "_innersize";
+pub const SDACCEL_INNER_SUFFIX: &'static str = "_inner";
+pub const SDACCEL_VAL_SUFFIX: &'static str = "_val";
 pub const SDACCEL_SIZE_IN_BYTES_SUFFIX: &'static str = "_size_in_byte";
 pub const SDACCEL_SIZE_KIND: ScalarKind = ScalarKind::I64;
 pub const SDACCEL_SIZE_TYPE: Type = Type::Scalar(SDACCEL_SIZE_KIND);
@@ -13,6 +16,7 @@ pub const SDACCEL_COUNTER_TYPE: Type = Type::Scalar(ScalarKind::I64);
 pub const SDACCEL_BUFFER_MEM_SUFFIX: &'static str = "_mbuf";
 pub const SDACCEL_BUFFER_BUILD_PREFIX: &'static str = "build_buff_";
 
+pub const SDACCEL_LOCAL_BUFF_SIZE_DEF:&'static str = "LOCAL_BUFF_SIZE";
 
 pub const SDACCEL_RESULT_PREFIX: &'static str = "result_";
 
@@ -44,7 +48,8 @@ pub fn gen_scalar_type_from_kind(scalar_kind: &ScalarKind) -> String {
 
 pub fn gen_scalar_type(ty: &Type) -> WeldResult<String> {
     match *ty {
-        Type::Scalar(scalar_kind) => Ok(gen_scalar_type_from_kind(&scalar_kind)),
+        Type::Scalar(scalar_kind) | Type::Simd(scalar_kind) =>
+            Ok(gen_scalar_type_from_kind(&scalar_kind)),
         Type::Vector(ref s) => {
             match **s {
                 Type::Scalar(kind) =>{
@@ -64,7 +69,7 @@ pub fn gen_scalar_type(ty: &Type) -> WeldResult<String> {
                         return weld_err!("Builderkind not supported in gen_scalar {:?}", ty)
                     }
                 }
-                BuilderKind::Merger(ref ty, op) => {
+                BuilderKind::Merger(ref ty, _) => {
                     if let Type::Scalar(ref kind) = *ty.as_ref() {
                         Ok(format!{"{} *", gen_scalar_type_from_kind(&kind)})
                     } else {
@@ -92,15 +97,15 @@ pub fn gen_var_size_in_byte_typed(param: &TypedParameter) -> String {
 }
 
 pub fn gen_line_size_in_byte_buff(ty: Type, name: &String, target: &String) -> String {
-    assign( gen_var_size_in_byte(name), gen_size_in_byte(ty, Some(target)).unwrap())
+    assign( gen_var_size_in_byte(name), gen_size_in_byte(ty, Some(target), None).unwrap())
 }
 
 pub fn gen_line_size_in_byte_var(ty: Type, name: &String) -> String {
-    assign( gen_var_size_in_byte(name), gen_size_in_byte(ty, None).unwrap())
+    assign( gen_var_size_in_byte(name), gen_size_in_byte(ty, None, None).unwrap())
 }
 
 pub fn gen_line_size_in_byte(ty: Type, name: &String) -> String {
-    assign( gen_var_size_in_byte(name), gen_size_in_byte(ty, Some(name)).unwrap())
+    assign( gen_var_size_in_byte(name), gen_size_in_byte(ty, Some(name), None).unwrap())
 }
 
 pub fn gen_line_size_in_byte_typed(param: &TypedParameter) -> String {
@@ -113,6 +118,28 @@ pub fn gen_sym_size_sym(sym: &Symbol) -> Symbol {
         id: sym.id
     }
 }
+
+pub fn gen_sym_inner_size_sym(sym: &Symbol) -> Symbol {
+    Symbol {
+        name: format!("{}{}", sym.name, SDACCEL_INNER_SIZE_SUFFIX),
+        id: sym.id
+    }
+}
+
+pub fn gen_sym_inner_sym(sym: &Symbol) -> Symbol {
+    Symbol {
+        name: format!("{}{}", sym.name, SDACCEL_INNER_SUFFIX),
+        id: sym.id
+    }
+}
+
+//pub fn gen_sym_inner_val_sym(sym: &Symbol) -> Symbol {
+    //Symbol {
+        //name: format!("{}{}{}", sym.name,
+                      //SDACCEL_INNER_SUFFIX, SDACCEL_VAL_SUFFIX),
+        //id: sym.id
+    //}
+//}
 
 pub fn gen_name_buffer_mem(param: &TypedParameter) -> String {
     let name = &param.name.name;
@@ -183,25 +210,29 @@ pub fn gen_sizeof(x:String) -> String {
 
 pub fn gen_size_in_byte_typed(param: &TypedParameter) -> WeldResult<String> {
     let name = &param.name.name;
-    gen_size_in_byte(param.ty.clone(), Some(name))
+    gen_size_in_byte(param.ty.clone(), Some(name), None)
 }
 
 
-pub fn gen_size_in_byte(ty: Type, name: Option<&String>) -> WeldResult<String> {
+pub fn gen_size_in_byte(ty: Type, name: Option<&String>, in_size_name:Option<&String>) -> WeldResult<String> {
 
+    //println!("ty: {:?}\nname:{:?}in_sizze:{:?}", ty, name, in_size_name);
     match name {
         Some(name) => {
             match ty {
                 Type::Vector(ref boxx) => {
-                    let size_name = gen_name_size(name);
+                    let actual_size_name = gen_name_size(name);
                     let kind_name = gen_scalar_type(boxx).unwrap();
-                    Ok(format!("{} * {}", size_name, gen_sizeof(kind_name)))
+                    Ok(format!("{} * {}", actual_size_name, gen_sizeof(kind_name)))
                 }
                 _ => weld_err!("Not supported result type for gen_size_in_type.")
             }
         }
         None => {
-            Ok(format!("{}", gen_sizeof(gen_scalar_type(&ty)?)))
+            match in_size_name {
+                Some(n) => Ok(format!("{} * {}", n, gen_sizeof(gen_scalar_type(&ty)?))),
+                None => Ok(format!("{}", gen_sizeof(gen_scalar_type(&ty)?)))
+            }
         }
 
     }
@@ -451,9 +482,30 @@ pub fn deref_sym(s:&Symbol) -> Symbol {
     }
 }
 
+pub fn ref_sym(s:&Symbol) -> Symbol {
+    Symbol {
+        name: format!("&{}", s.name),
+        id:s.id
+    }
+}
+
 pub fn struct_sym(sym:&Symbol, i: usize) -> Symbol {
     Symbol {
         name: format!("{}_{}", sym.name, i),
         id: sym.id,
     }
+}
+pub fn gen_sym_string(s:&String) -> Symbol {
+    Symbol {
+        name: s.clone(),
+        id: 0
+    }
+}
+
+pub fn extract_vector_scalar_type(ty: &Type) -> WeldResult<Type> {
+    if let Type::Vector(ref v) = *ty {
+        return Ok(v.as_ref().clone())
+    }
+    weld_err!("Can't exract from non vector type")
+
 }

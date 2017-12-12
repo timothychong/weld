@@ -75,7 +75,7 @@ impl SDAccelProgram {
         let program = gen_new_cl_var( &mut generator, SDAccelType::CLProgram);
         let mut sort_top_params = top_params.clone();
         sort_top_params.sort_by(|a, b| a.name.cmp(&b.name));
-        let mut prog = SDAccelProgram {
+        let prog = SDAccelProgram {
             ret_ty: ret_ty.clone(),
             top_params: (sort_top_params).clone(),
             top_params_cl: Vec::new(),
@@ -300,7 +300,7 @@ impl SDAccelProgram {
         match &self.ret_ty.clone() {
             &Type::Function(_, ref rt ) => {
                 match **rt {
-                    Type::Scalar(ref k) => {
+                    Type::Scalar(_) => {
                         let name = prog.get_ret_sym();
                         let alloc_name = gen_name_result_mem(0);
                         let mut mem_var = self.new_cl_var_name(SDAccelType::CLMem, &alloc_name);
@@ -317,7 +317,7 @@ impl SDAccelProgram {
                         self.map_var_buff.insert(name.clone(), mem_var.clone());
                     }
 
-                    Type::Vector(ref v) => {
+                    Type::Vector(_) => {
                         let name = prog.get_ret_sym();
                         let alloc_name = gen_name_result_mem(0);
                         let mut mem_var = self.new_cl_var_name(SDAccelType::CLMem, &alloc_name);
@@ -407,7 +407,7 @@ impl SDAccelProgram {
             &Type::Function(_, ref rt ) => {
                 match **rt {
 
-                    Type::Scalar(ref k) => {
+                    Type::Scalar(_) => {
                         let name = Symbol {
                             name: gen_name_result_mem(0),
                             id: 0
@@ -418,7 +418,7 @@ impl SDAccelProgram {
                             ty: ty,
                             name: name.clone(),
                         };
-                        let (mem, size) = gen_set_arg(
+                        let (mem, _) = gen_set_arg(
                                 name.clone(),
                                 &p,
                                 self.kernel.clone(),
@@ -427,7 +427,7 @@ impl SDAccelProgram {
                         self.main.add_line(mem);
                     }
 
-                    Type::Vector(ref k) => {
+                    Type::Vector(_) => {
                         let name = Symbol {
                             name: gen_name_result_mem(0),
                             id: 0
@@ -437,7 +437,7 @@ impl SDAccelProgram {
                             ty: SDACCEL_SIZE_TYPE.clone(),
                             name: name.clone(),
                         };
-                        let (mem, size) = gen_set_arg(
+                        let (mem, _) = gen_set_arg(
                                 name.clone(),
                                 &p,
                                 self.kernel.clone(),
@@ -495,7 +495,6 @@ impl SDAccelProgram {
     }
 
     pub fn enqueue_buffer_read(&mut self, build_buffer: &Symbol,
-                               size_sym: &Symbol,
                                ) -> WeldResult<()>{
 
 
@@ -549,7 +548,7 @@ impl SDAccelProgram {
             _ => return weld_err!("Only function return type supported"),
         }
 ;
-        let mut events_cl = self.new_cl_var(
+        let events_cl = self.new_cl_var(
             SDAccelType::Vector(Box::new((SDAccelType::CLEvent)), num));
         self.main.add_line(events_cl.gen_declare());
 
@@ -714,13 +713,13 @@ pub fn compile_program(program: &Program, conf: &ParsedConf,
     println!("WELD IR:\n{}\n", print_typed_expr(&expr));
 
     let start = PreciseTime::now();
-    ast_to_sdaccel(&expr)?;
+    ast_to_sdaccel(&expr, conf)?;
     let end = PreciseTime::now();
     stats.weld_times.push(("AST to SDACCEL".to_string(), start.to(end)));
     Ok(())
 }
 
-pub fn ast_to_sdaccel(expr: &TypedExpr) -> WeldResult<String> {
+pub fn ast_to_sdaccel(expr: &TypedExpr, conf: &ParsedConf) -> WeldResult<String> {
     if let ExprKind::Lambda { ref params, ref body } = expr.kind {
 
         let mut kernel_prog = SDAccelKernel::new(&expr.ty);
@@ -729,9 +728,14 @@ pub fn ast_to_sdaccel(expr: &TypedExpr) -> WeldResult<String> {
             kernel_prog.funcs[0].add_param(&tp.name, &tp.ty);
         }
 
+        for pass in &conf.optimization_passes {
+            if pass.clone().pass_name() == "vectorize" {
+                kernel_prog.use_vector = true;
+            }
+        }
+
         //Need to update to support struct
         let sym = gen_expr(body, &mut kernel_prog, 0, first_block)?.clone();
-        let sym_size = kernel_prog.find_var_target(&sym);
         kernel_prog.set_ret_sym(&sym);
 
         let mut prog = SDAccelProgram::new(&expr.ty, params).unwrap();
@@ -756,7 +760,7 @@ pub fn ast_to_sdaccel(expr: &TypedExpr) -> WeldResult<String> {
         prog.main.add_line("");
         prog.enqueue_command()?;
         prog.main.add_line("");
-        prog.enqueue_buffer_read(&sym, &sym_size)?;
+        prog.enqueue_buffer_read(&sym)?;
         prog.main.add_line("");
         prog.release()?;
         prog.main.add_line("return (int64_t) output_result; \n}");
